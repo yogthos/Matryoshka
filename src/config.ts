@@ -1,6 +1,14 @@
 import { readFile } from "fs/promises";
 import { resolve } from "path";
 
+/**
+ * Configuration file types
+ *
+ * Note: These types mirror some types in llm/types.ts but serve different purposes:
+ * - These types represent the JSON config file structure (fields may be optional)
+ * - llm/types.ts types represent runtime API contracts (required fields for operation)
+ */
+
 export interface LLMOptions {
   temperature?: number;
   num_ctx?: number;
@@ -84,14 +92,3 @@ export async function loadConfig(configPath?: string): Promise<Config> {
   }
 }
 
-export function resolveEnvVars(value: string): string {
-  // Match ${VAR_NAME} pattern
-  const envVarPattern = /\$\{([^}]+)\}/g;
-  return value.replace(envVarPattern, (_, varName) => {
-    const envValue = process.env[varName];
-    if (!envValue) {
-      throw new Error(`Environment variable ${varName} not set`);
-    }
-    return envValue;
-  });
-}

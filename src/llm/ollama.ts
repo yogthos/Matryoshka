@@ -25,7 +25,10 @@ export function createOllamaProvider(config: ProviderConfig): LLMProvider {
         );
       }
 
-      const data = (await response.json()) as { response: string };
+      const data = (await response.json()) as { response?: string };
+      if (!data.response) {
+        throw new Error("Ollama returned empty response");
+      }
       return data.response;
     },
   };

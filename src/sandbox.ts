@@ -266,20 +266,23 @@ export async function createSandbox(
         }) as Promise<unknown>;
 
         // Handle the promise with timeout
-        const result = await Promise.race([
-          resultPromise,
-          new Promise((_, reject) =>
-            setTimeout(
-              () => reject(new Error(`Execution timeout after ${timeoutMs}ms`)),
-              timeoutMs
-            )
-          ),
-        ]);
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error(`Execution timeout after ${timeoutMs}ms`)),
+            timeoutMs
+          );
+        });
 
-        return {
-          result,
-          logs: executionLogs,
-        };
+        try {
+          const result = await Promise.race([resultPromise, timeoutPromise]);
+          return {
+            result,
+            logs: executionLogs,
+          };
+        } finally {
+          if (timeoutId) clearTimeout(timeoutId);
+        }
       } catch (err) {
         const errorMessage =
           err instanceof Error ? err.message : String(err);

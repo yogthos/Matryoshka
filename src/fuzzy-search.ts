@@ -50,10 +50,15 @@ function fuzzyScore(text, pattern, maxDistance) {
   if (patternLen === 0) return 0;
   if (textLen === 0) return Infinity;
 
+  // If text is much shorter than pattern, no good match possible
+  const minRequiredLength = patternLen - maxDistance;
+  if (textLen < minRequiredLength) return Infinity;
+
   let bestScore = Infinity;
 
-  // Slide pattern over text
-  for (let start = 0; start <= textLen - patternLen + maxDistance; start++) {
+  // Slide pattern over text (ensure non-negative upper bound)
+  const maxStart = Math.max(0, textLen - patternLen + maxDistance);
+  for (let start = 0; start <= maxStart; start++) {
     let errors = 0;
     let matched = 0;
     let j = start;

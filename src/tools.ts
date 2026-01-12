@@ -188,7 +188,7 @@ export function getToolInterfaces(registry: ToolRegistry): string {
       .join(", ");
 
     const returnType = tool.returns?.type || "void";
-    const funcName = tool.name.replace(".", "_"); // context.slice -> context_slice for valid TS
+    const funcName = tool.name.replaceAll(".", "_"); // context.slice -> context_slice for valid TS
 
     if (tool.name.startsWith("context.")) {
       // These are methods on the context string

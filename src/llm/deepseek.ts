@@ -38,6 +38,9 @@ export function createDeepSeekProvider(config: ProviderConfig): LLMProvider {
       }
 
       const data = (await response.json()) as ChatCompletionResponse;
+      if (!data.choices || data.choices.length === 0) {
+        throw new Error("DeepSeek returned empty response (no choices)");
+      }
       return data.choices[0].message.content;
     },
   };

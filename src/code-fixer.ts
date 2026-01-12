@@ -5,6 +5,93 @@
 
 import vm from "node:vm";
 
+/**
+ * Remove a block with balanced braces starting at a given position
+ * Returns the end index (exclusive) of the block, or -1 if not found
+ */
+function findBalancedBraceEnd(code: string, startIndex: number): number {
+  let depth = 0;
+  let inString = false;
+  let stringChar = "";
+
+  for (let i = startIndex; i < code.length; i++) {
+    const char = code[i];
+    const prevChar = i > 0 ? code[i - 1] : "";
+
+    // Handle string literals (skip brace counting inside strings)
+    if ((char === '"' || char === "'" || char === "`") && prevChar !== "\\") {
+      if (!inString) {
+        inString = true;
+        stringChar = char;
+      } else if (char === stringChar) {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (char === "{") {
+      depth++;
+    } else if (char === "}") {
+      depth--;
+      if (depth === 0) {
+        return i + 1; // Return position after closing brace
+      }
+    }
+  }
+
+  return -1; // Unbalanced
+}
+
+/**
+ * Remove TypeScript interface/type declarations with proper brace matching
+ */
+function removeTypeDeclarations(code: string): { code: string; removed: boolean } {
+  let result = code;
+  let removed = false;
+
+  // Match interface/type declarations and remove them with balanced braces
+  const declarationPattern = /^(interface|type)\s+\w+\s*(\{|=)/gm;
+  let match;
+
+  while ((match = declarationPattern.exec(result)) !== null) {
+    const startIndex = match.index;
+    const matchText = match[0];
+
+    if (matchText.endsWith("{")) {
+      // Interface with braces - find the balanced end
+      const braceStart = match.index + matchText.length - 1;
+      const endIndex = findBalancedBraceEnd(result, braceStart);
+
+      if (endIndex !== -1) {
+        // Remove the entire declaration including trailing whitespace/newline
+        let removeEnd = endIndex;
+        while (removeEnd < result.length && /[\s;]/.test(result[removeEnd])) {
+          removeEnd++;
+        }
+        result = result.slice(0, startIndex) + result.slice(removeEnd);
+        removed = true;
+        declarationPattern.lastIndex = startIndex; // Reset to check from same position
+      }
+    } else {
+      // Type alias with = (e.g., type Foo = string;)
+      const semicolonIndex = result.indexOf(";", match.index);
+      if (semicolonIndex !== -1) {
+        let removeEnd = semicolonIndex + 1;
+        while (removeEnd < result.length && result[removeEnd] === "\n") {
+          removeEnd++;
+        }
+        result = result.slice(0, startIndex) + result.slice(removeEnd);
+        removed = true;
+        declarationPattern.lastIndex = startIndex;
+      }
+    }
+  }
+
+  return { code: result, removed };
+}
+
 export interface FixResult {
   code: string;
   fixed: boolean;
@@ -86,11 +173,10 @@ export function fixCode(code: string): FixResult {
     fixes.push("Removed TypeScript type annotations");
   }
 
-  // Fix 5: Fix interface/type declarations (not valid JS)
-  const beforeInterface = fixedCode;
-  fixedCode = fixedCode.replace(/^(interface|type)\s+\w+\s*\{[^}]*\}\s*\n?/gm, "");
-  fixedCode = fixedCode.replace(/^type\s+\w+\s*=\s*[^;]+;\s*\n?/gm, "");
-  if (fixedCode !== beforeInterface) {
+  // Fix 5: Fix interface/type declarations (not valid JS) - with proper brace matching
+  const typeRemoval = removeTypeDeclarations(fixedCode);
+  if (typeRemoval.removed) {
+    fixedCode = typeRemoval.code;
     fixes.push("Removed TypeScript interface/type declarations");
   }
 

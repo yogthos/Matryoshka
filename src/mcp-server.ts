@@ -10,6 +10,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { runRLM } from "./rlm.js";
 import { loadConfig } from "./config.js";
@@ -26,9 +27,7 @@ export interface MCPTool {
   };
 }
 
-export interface MCPToolResult {
-  content: Array<{ type: "text"; text: string }>;
-}
+export type MCPToolResult = CallToolResult;
 
 export interface MCPServerOptions {
   llmClient?: LLMQueryFn;
@@ -77,22 +76,22 @@ const ANALYZE_DOCUMENT_TOOL: MCPTool = {
  */
 export function createMCPServer(options: MCPServerOptions = {}): MCPServerInstance {
   let llmClient: LLMQueryFn | undefined = options.llmClient;
-  let configLoaded = false;
 
   const ensureLLMClient = async (): Promise<LLMQueryFn> => {
     if (llmClient) {
       return llmClient;
     }
 
-    if (!configLoaded) {
-      const config = await loadConfig("./config.json");
-      const providerName = config.llm.provider;
-      const providerConfig = config.providers[providerName];
-      llmClient = createLLMClient(providerName, providerConfig);
-      configLoaded = true;
+    const config = await loadConfig("./config.json");
+    const providerName = config.llm.provider;
+    const providerConfig = config.providers[providerName];
+
+    if (!providerConfig) {
+      throw new Error(`Provider '${providerName}' not found in config`);
     }
 
-    return llmClient!;
+    llmClient = createLLMClient(providerName, providerConfig);
+    return llmClient;
   };
 
   return {
@@ -174,7 +173,7 @@ export function createMCPServer(options: MCPServerOptions = {}): MCPServerInstan
 // Main entry point - run server when executed directly
 const isTestMode = process.argv.includes("--test");
 
-if (process.argv[1]?.endsWith("mcp-server.ts") || process.argv[1]?.endsWith("mcp-server.js")) {
+if (process.argv[1]?.endsWith("mcp-server.ts") || process.argv[1]?.endsWith("mcp-server.js") || process.argv[1]?.endsWith("rlm-mcp")) {
   if (isTestMode) {
     // Test mode - just confirm server can be created and exit
     const server = createMCPServer();

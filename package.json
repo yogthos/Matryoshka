@@ -1,19 +1,65 @@
 {
-  "name": "recursive-language-model",
+  "name": "matryoshka-rlm",
   "version": "0.1.0",
   "type": "module",
-  "description": "Recursive Language Model implementation for processing documents larger than context windows",
+  "description": "Recursive Language Model - Process documents larger than LLM context windows",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "rlm": "dist/index.js",
+    "rlm-mcp": "dist/mcp-server.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./rlm": {
+      "types": "./dist/rlm.d.ts",
+      "default": "./dist/rlm.js"
+    },
+    "./server": {
+      "types": "./dist/mcp-server.d.ts",
+      "default": "./dist/mcp-server.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "config.example.json"
+  ],
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
     "mcp": "tsx src/mcp-server.ts",
     "typecheck": "tsc --noEmit"
   },
+  "keywords": [
+    "llm",
+    "rlm",
+    "mcp",
+    "claude",
+    "document-analysis",
+    "recursive",
+    "context-window",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yogthos/Matryoshka.git"
+  },
+  "homepage": "https://github.com/yogthos/Matryoshka#readme",
+  "bugs": {
+    "url": "https://github.com/yogthos/Matryoshka/issues"
+  },
+  "author": "yogthos",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
   },
