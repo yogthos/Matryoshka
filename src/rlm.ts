@@ -67,7 +67,7 @@ ${toolInterfaces}
    memory.push({ finding: "important detail", location: 42 });
    \`\`\`
 
-4. **Log progress**: Use \`console.log()\` to show what you're discovering.
+4. **Log progress**: Use \`console.log()\` to show what you're discovering. Note: Output is truncated to ~4000 chars, so peek at data with slices like \`context.slice(0, 500)\` rather than printing large blocks.
 
 5. **Avoid iterating full context**: Do NOT loop from 0 to ${formattedLength}. Sample first, then target specific sections.
 
@@ -282,21 +282,30 @@ export async function runRLM(
 
         const result = await sandbox.execute(codeToRun, turnTimeoutMs);
 
-        // Build execution feedback
+        // Build execution feedback with truncation to minimize context passing
+        const MAX_OUTPUT_LENGTH = 4000; // Max chars per output section
+        const truncate = (s: string, max: number = MAX_OUTPUT_LENGTH): string => {
+          if (s.length <= max) return s;
+          const half = Math.floor(max / 2) - 20;
+          return s.slice(0, half) + `\n... [${s.length - max} chars truncated] ...\n` + s.slice(-half);
+        };
+
         let feedback = `Turn ${turn} Sandbox execution:\n`;
 
         if (result.logs.length > 0) {
           log(`[Turn ${turn}] Console output:`);
           result.logs.forEach(l => log(`  ${l}`));
-          feedback += `Logs:\n${result.logs.join("\n")}\n`;
+          const logsText = result.logs.join("\n");
+          feedback += `Logs:\n${truncate(logsText)}\n`;
         }
 
         if (result.error) {
           log(`[Turn ${turn}] Error: ${result.error}`);
           feedback += `Error: ${result.error}\n`;
         } else if (result.result !== undefined && result.result !== null) {
-          log(`[Turn ${turn}] Result: ${JSON.stringify(result.result)}`);
-          feedback += `Result: ${JSON.stringify(result.result, null, 2)}\n`;
+          const resultStr = JSON.stringify(result.result, null, 2);
+          log(`[Turn ${turn}] Result: ${resultStr}`);
+          feedback += `Result: ${truncate(resultStr)}\n`;
         }
 
         // Remind about final answer format
