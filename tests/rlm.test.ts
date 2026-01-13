@@ -39,11 +39,11 @@ describe("RLM Executor", () => {
       expect(prompt).toContain("FINAL_VAR");
     });
 
-    it("should warn about not iterating full context", () => {
+    it("should guide model to use tools for exploration", () => {
       const prompt = buildSystemPrompt(1000000, "");
-      expect(prompt.toLowerCase()).toMatch(
-        /do not.*loop|sample first|avoid.*iterating/i
-      );
+      // Prompt should guide model to use tools like grep, text_stats rather than raw iteration
+      expect(prompt.toLowerCase()).toMatch(/grep|text_stats|fuzzy_search/i);
+      expect(prompt.toLowerCase()).toContain("blind");
     });
 
   });
@@ -138,11 +138,14 @@ describe("RLM Executor", () => {
 
   describe("runRLM", () => {
     it("should load document and process final answer", async () => {
-      mockLLM.mockResolvedValueOnce("<<<FINAL>>>\ndone\n<<<END>>>");
+      // First turn: execute code (required before final answer is accepted)
+      mockLLM
+        .mockResolvedValueOnce("```javascript\nconsole.log('exploring');\n```")
+        .mockResolvedValueOnce("<<<FINAL>>>\ndone\n<<<END>>>");
 
       const result = await runRLM("test query", "./test-fixtures/small.txt", {
         llmClient: mockLLM,
-        maxTurns: 1,
+        maxTurns: 5,
       });
 
       expect(result).toBe("done");
@@ -195,9 +198,15 @@ describe("RLM Executor", () => {
 
     it("should handle sandbox errors gracefully", async () => {
       mockLLM
+        // Turn 1: Error
         .mockResolvedValueOnce(
           '```typescript\nthrow new Error("test error");\n```'
         )
+        // Turn 2: Successful code (clears error state)
+        .mockResolvedValueOnce(
+          "```javascript\nconsole.log('fixed');\n```"
+        )
+        // Turn 3: Final answer (accepted after successful code)
         .mockResolvedValueOnce("<<<FINAL>>>\nrecovered\n<<<END>>>");
 
       const result = await runRLM("test query", "./test-fixtures/small.txt", {

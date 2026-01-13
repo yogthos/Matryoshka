@@ -60,10 +60,12 @@ describe("MCP Server", () => {
     it("should execute analyze_document with mock LLM", async () => {
       const { createMCPServer } = await import("../src/mcp-server.js");
 
-      // Create a mock LLM that returns a final answer immediately
+      // Create a mock LLM that first runs code, then returns final answer
+      // (code execution is required before final answer is accepted)
       const mockLLMClient = vi
         .fn()
-        .mockResolvedValue("<<<FINAL>>>\nTest result\n<<<END>>>");
+        .mockResolvedValueOnce("```javascript\nconsole.log('exploring');\n```")
+        .mockResolvedValueOnce("<<<FINAL>>>\nTest result\n<<<END>>>");
 
       const server = createMCPServer({ llmClient: mockLLMClient });
 
@@ -96,7 +98,13 @@ describe("MCP Server", () => {
       const { createMCPServer } = await import("../src/mcp-server.js");
 
       let capturedMaxTurns: number | undefined;
+      let callCount = 0;
       const mockLLMClient = vi.fn().mockImplementation(() => {
+        callCount++;
+        // First call: execute code, second call: final answer
+        if (callCount === 1) {
+          return Promise.resolve("```javascript\nconsole.log('test');\n```");
+        }
         return Promise.resolve("<<<FINAL>>>\ndone\n<<<END>>>");
       });
 
