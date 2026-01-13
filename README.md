@@ -242,38 +242,123 @@ The LLM has access to these tools when exploring documents:
 2. If errors persist, try a different model - some are better at generating valid code
 3. Use `--verbose` to see what code the model is generating
 
-### Model-Specific Tuning
+### Model Adapters
 
-**Symptom**: A model that works with one provider doesn't work well with another, or a different model size behaves differently.
+RLM uses an **adapter pattern** to handle model-specific prompting and response parsing. Each adapter encapsulates:
 
-**Cause**: Different LLMs have varying instruction-following capabilities, code generation quality, and prompting preferences. The RLM system prompt and feedback messages are tuned for specific model behaviors.
+- **System prompt** - How to instruct the model
+- **Code extraction** - How to parse code blocks from responses
+- **Answer detection** - How to recognize when the model has finished
+- **Feedback messages** - How to guide the model when it makes mistakes
 
-**Why This Happens**:
+#### Available Adapters
 
-- **Instruction following**: Smaller models (7B) may ignore complex instructions or take shortcuts (e.g., answering without exploring)
-- **Code generation**: Some models prefer TypeScript syntax, others generate Python by mistake
-- **Termination patterns**: Models differ in how they signal completion—some use `<<<FINAL>>>` correctly, others put it inside code blocks
-- **Error recovery**: When code fails, some models self-correct while others repeat the same mistake
+| Adapter | Models | Description |
+|---------|--------|-------------|
+| `qwen` | qwen*, codeqwen* | Tuned for Qwen models with emphasis on code-only responses |
+| `deepseek` | deepseek* | Structured prompts for DeepSeek's instruction-following style |
+| `base` | (fallback) | Generic adapter that works with most models |
 
-**Current Tuning**:
+#### Auto-Detection
 
-The Ollama provider is currently tuned for `qwen2.5-coder:7b` with these accommodations:
-- Case-insensitive `grep()` to handle varying capitalization
-- Detection of `<<<FINAL>>>` markers inside code blocks
-- Variable persistence between turns (REPL-like state)
-- Rejection of answers after code errors (forces retry)
-- Fallback to console output when memory is empty
+Adapters are automatically selected based on the model name:
 
-**Adapting for Other Models**:
+```bash
+# Auto-detects "qwen" adapter from model name
+rlm "query" ./file.txt --model qwen2.5-coder:7b
 
-If using a different model, you may need to adjust `src/rlm.ts`:
+# Auto-detects "deepseek" adapter
+rlm "query" ./file.txt --model deepseek-chat
+```
 
-1. **System prompt** (`buildSystemPrompt`): Modify examples and instructions to match model's style
-2. **Final answer detection** (`extractFinalAnswer`): Add patterns the model uses to signal completion
-3. **Feedback messages**: Adjust error messages and hints to guide the specific model
-4. **Code extraction** (`extractCode`): Some models use different code block markers
+#### Explicit Selection
 
-Larger models (30B+) typically need fewer accommodations as they follow instructions more reliably.
+Override auto-detection via CLI or config:
+
+```bash
+# CLI override
+rlm "query" ./file.txt --adapter qwen
+```
+
+```json
+// config.json - per-provider adapter
+{
+  "providers": {
+    "ollama": {
+      "model": "qwen2.5-coder:7b",
+      "adapter": "qwen"
+    }
+  }
+}
+```
+
+#### Creating Custom Adapters
+
+To add support for a new model family:
+
+1. Create `src/adapters/mymodel.ts`:
+
+```typescript
+import type { ModelAdapter } from "./types.js";
+import { baseExtractCode, baseExtractFinalAnswer } from "./base.js";
+
+export function createMyModelAdapter(): ModelAdapter {
+  return {
+    name: "mymodel",
+
+    buildSystemPrompt(contextLength, toolInterfaces) {
+      return `Your custom system prompt here...`;
+    },
+
+    extractCode(response) {
+      // Custom code extraction or use baseExtractCode(response)
+      return baseExtractCode(response);
+    },
+
+    extractFinalAnswer(response) {
+      // Custom answer detection or use baseExtractFinalAnswer(response)
+      return baseExtractFinalAnswer(response);
+    },
+
+    getNoCodeFeedback() {
+      return "Feedback when model doesn't provide code...";
+    },
+
+    getErrorFeedback(error) {
+      return `Feedback when code fails: ${error}`;
+    },
+  };
+}
+```
+
+2. Register in `src/adapters/index.ts`:
+
+```typescript
+import { createMyModelAdapter } from "./mymodel.js";
+
+// Add to registry
+const adapterFactories = {
+  // ... existing adapters
+  mymodel: createMyModelAdapter,
+};
+
+// Add auto-detection pattern
+const modelPatterns = [
+  // ... existing patterns
+  { pattern: /^mymodel/i, adapter: "mymodel" },
+];
+```
+
+#### Why Adapters Matter
+
+Different LLMs have varying behaviors:
+
+- **Instruction following**: Smaller models may ignore complex instructions
+- **Code generation**: Some models output Python instead of JavaScript
+- **Termination patterns**: Models differ in how they signal completion
+- **Error recovery**: Some models self-correct, others repeat mistakes
+
+The adapter system handles these differences transparently, allowing the same query to work across different model families.
 
 ### Query Complexity and Model Capabilities
 
