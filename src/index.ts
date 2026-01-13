@@ -10,6 +10,7 @@ import { resolve } from "node:path";
 import { runRLM } from "./rlm.js";
 import { loadConfig } from "./config.js";
 import { createLLMClient } from "./llm/index.js";
+import { resolveAdapter, getAvailableAdapters } from "./adapters/index.js";
 
 interface CLIOptions {
   query: string;
@@ -18,6 +19,7 @@ interface CLIOptions {
   timeout: number;
   model: string;
   provider: string;
+  adapter: string;
   verbose: boolean;
   dryRun: boolean;
   config: string;
@@ -36,6 +38,7 @@ Options:
   --timeout <ms>     Timeout per turn in milliseconds (default: 30000)
   --model <name>     Override the LLM model name
   --provider <name>  Override the LLM provider (ollama, deepseek, openai)
+  --adapter <name>   Override the model adapter (qwen, deepseek, base)
   --config <path>    Path to config file (default: ./config.json)
   --verbose          Enable verbose output
   --dry-run          Show configuration without running
@@ -56,6 +59,7 @@ function parseArgs(args: string[]): CLIOptions {
     timeout: 30000,
     model: "",
     provider: "",
+    adapter: "",
     verbose: false,
     dryRun: false,
     config: "./config.json",
@@ -77,6 +81,8 @@ function parseArgs(args: string[]): CLIOptions {
       options.model = args[++i];
     } else if (arg === "--provider") {
       options.provider = args[++i];
+    } else if (arg === "--adapter") {
+      options.adapter = args[++i];
     } else if (arg === "--config") {
       options.config = args[++i];
     } else if (arg === "--verbose") {
@@ -128,6 +134,8 @@ async function main(): Promise<void> {
     console.log(`Timeout: ${options.timeout}`);
     console.log(`Model: ${options.model || "(from config)"}`);
     console.log(`Provider: ${options.provider || "(from config)"}`);
+    console.log(`Adapter: ${options.adapter || "(auto-detect)"}`);
+    console.log(`Available adapters: ${getAvailableAdapters().join(", ")}`);
     console.log(`Verbose: ${options.verbose}`);
     return;
   }
@@ -159,10 +167,15 @@ async function main(): Promise<void> {
   const overrides = options.model ? { model: options.model } : undefined;
   const effectiveModel = options.model || providerConfig.model || "default";
 
+  // Resolve adapter: CLI option > config option > auto-detect from model name
+  const explicitAdapter = options.adapter || providerConfig.adapter;
+  const adapter = resolveAdapter(effectiveModel, explicitAdapter);
+
   if (options.verbose) {
     console.log("Configuration:");
     console.log(`  Provider: ${providerName}`);
     console.log(`  Model: ${effectiveModel}`);
+    console.log(`  Adapter: ${adapter.name}${explicitAdapter ? "" : " (auto-detected)"}`);
     console.log(`  Max turns: ${options.maxTurns}`);
     console.log(`  Timeout: ${options.timeout}ms`);
     console.log("");
@@ -181,6 +194,7 @@ async function main(): Promise<void> {
   try {
     const result = await runRLM(options.query, filePath, {
       llmClient,
+      adapter,
       maxTurns: options.maxTurns,
       turnTimeoutMs: options.timeout,
       maxSubCalls: config.sandbox.maxSubCalls,

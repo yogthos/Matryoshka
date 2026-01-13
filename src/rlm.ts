@@ -11,22 +11,25 @@ import { createSandbox, Sandbox } from "./sandbox.js";
 import { createToolRegistry, getToolInterfaces } from "./tools.js";
 import { tryFixCode } from "./code-fixer.js";
 import type { LLMQueryFn } from "./llm/types.js";
+import type { ModelAdapter } from "./adapters/types.js";
+import { createBaseAdapter } from "./adapters/base.js";
+
+// Re-export types for backwards compatibility
+export type { FinalVarMarker } from "./adapters/types.js";
 
 export interface RLMOptions {
   llmClient: LLMQueryFn;
+  /** Model adapter for prompt/response handling. Uses base adapter if not specified. */
+  adapter?: ModelAdapter;
   maxTurns?: number;
   turnTimeoutMs?: number;
   maxSubCalls?: number;
   verbose?: boolean;
 }
 
-export interface FinalVarMarker {
-  type: "var";
-  name: string;
-}
-
 /**
  * Build the system prompt for the RLM
+ * @deprecated Use adapter.buildSystemPrompt() instead
  * @param contextLength - Length of the document in characters
  * @param toolInterfaces - TypeScript interface definitions for available tools
  */
@@ -94,6 +97,7 @@ Reminder: You are blind. Write code to see.
 
 /**
  * Extract code from LLM response
+ * @deprecated Use adapter.extractCode() instead
  */
 export function extractCode(response: string): string | null {
   // Match typescript, ts, javascript, or js code blocks
@@ -109,6 +113,7 @@ export function extractCode(response: string): string | null {
 
 /**
  * Extract final answer from LLM response
+ * @deprecated Use adapter.extractFinalAnswer() instead
  */
 export function extractFinalAnswer(
   response: string | undefined | null
@@ -167,7 +172,14 @@ export async function runRLM(
   filePath: string,
   options: RLMOptions
 ): Promise<unknown> {
-  const { llmClient, maxTurns = 10, turnTimeoutMs = 30000, maxSubCalls = 10, verbose = false } = options;
+  const {
+    llmClient,
+    adapter = createBaseAdapter(),
+    maxTurns = 10,
+    turnTimeoutMs = 30000,
+    maxSubCalls = 10,
+    verbose = false,
+  } = options;
 
   const log = (msg: string) => {
     if (verbose) console.log(msg);
@@ -184,10 +196,12 @@ export async function runRLM(
 
   log(`\n[RLM] Loaded document: ${documentContent.length.toLocaleString()} characters`);
 
-  // Build system prompt
+  // Build system prompt using the adapter
   const registry = createToolRegistry();
   const toolInterfaces = getToolInterfaces(registry);
-  const systemPrompt = buildSystemPrompt(documentContent.length, toolInterfaces);
+  const systemPrompt = adapter.buildSystemPrompt(documentContent.length, toolInterfaces);
+
+  log(`[RLM] Using adapter: ${adapter.name}`);
 
   // Create sandbox with LLM query function
   const sandbox: Sandbox = await createSandbox(documentContent, llmClient, {
@@ -212,6 +226,8 @@ export async function runRLM(
   let lastMeaningfulOutput = "";
   // Track consecutive no-code responses to detect stuck model
   let noCodeCount = 0;
+  // Track last executed code to detect repetition
+  let lastCode = "";
 
   try {
     for (let turn = 1; turn <= maxTurns; turn++) {
@@ -230,7 +246,7 @@ export async function runRLM(
 
       // Extract and execute code FIRST (before checking final answer)
       // This ensures if response has both code and final marker, code runs first
-      const code = extractCode(response);
+      const code = adapter.extractCode(response);
       if (code) {
         // Check if the code block contains <<<FINAL>>> markers (model put answer inside code block)
         const finalInCode = code.match(/<<<FINAL>>>([\s\S]*?)<<<END>>>/);
@@ -247,6 +263,24 @@ export async function runRLM(
 
         codeExecuted = true;
         noCodeCount = 0; // Reset no-code counter on successful code extraction
+
+        // Check if code is being repeated
+        const isRepeatedCode = code.trim() === lastCode.trim();
+        if (isRepeatedCode) {
+          log(`[Turn ${turn}] WARNING: Repeated code detected`);
+          const feedback = `ERROR: You are repeating the same code. This will give the same output.
+
+Try a DIFFERENT approach:
+- Use grep("sales") to search for sales-related data
+- Use grep("SALES_DATA") to find specific data entries
+- After finding data, extract numbers and compute the answer
+
+Write NEW code now:`;
+          history.push({ role: "user", content: feedback });
+          continue;
+        }
+        lastCode = code;
+
         log(`[Turn ${turn}] Executing code:`);
         log("```javascript");
         log(code);
@@ -284,9 +318,16 @@ export async function runRLM(
 
           if (isDoneOnly || isRepeatedOutput) {
             doneCount++;
-            if (doneCount >= 2 && lastMeaningfulOutput) {
+            if (doneCount >= 3 && lastMeaningfulOutput) {
               log(`[Turn ${turn}] Detected stuck pattern. Auto-terminating with last meaningful output.`);
               return lastMeaningfulOutput;
+            }
+            // Add feedback to encourage different approach
+            if (isRepeatedOutput) {
+              feedback += `\nWARNING: Output is the same as before. Try a DIFFERENT approach:\n`;
+              feedback += `- Use grep("keyword") to search for specific data\n`;
+              feedback += `- Try different search terms related to the query\n`;
+              feedback += `- Do NOT repeat the same code\n`;
             }
           } else {
             // Save meaningful output - prefer computed results over raw data dumps
@@ -329,7 +370,7 @@ export async function runRLM(
         // Check for final answer AFTER code execution (same response may have both)
         // But only if there was no error - let model retry on errors
         if (!result.error) {
-          const finalAnswer = extractFinalAnswer(response);
+          const finalAnswer = adapter.extractFinalAnswer(response);
           if (finalAnswer !== null) {
             log(`[Turn ${turn}] Final answer found after code execution`);
             if (typeof finalAnswer === "object" && finalAnswer.type === "var") {
@@ -358,18 +399,12 @@ export async function runRLM(
         }
 
         // Check for final answer in responses without code
-        const finalAnswer = extractFinalAnswer(response);
+        const finalAnswer = adapter.extractFinalAnswer(response);
         if (finalAnswer !== null) {
           // Reject if no code was ever executed
           if (!codeExecuted) {
             log(`[Turn ${turn}] Rejecting final answer - no code executed yet`);
-            const feedback = `ERROR: You tried to answer without reading the document.
-
-You MUST write JavaScript code to explore the document first. Example:
-\`\`\`javascript
-const hits = grep("keyword");
-console.log(JSON.stringify(hits, null, 2));
-\`\`\``;
+            const feedback = `ERROR: You tried to answer without reading the document.\n\n${adapter.getNoCodeFeedback()}`;
             history.push({ role: "user", content: feedback });
             continue;
           }
@@ -377,8 +412,7 @@ console.log(JSON.stringify(hits, null, 2));
           // Reject if last execution had an error (model might be explaining the error, not answering)
           if (lastExecutionHadError) {
             log(`[Turn ${turn}] Rejecting final answer - last execution had error, need retry`);
-            const feedback = `The previous code had an error. Fix the code and try again.`;
-            history.push({ role: "user", content: feedback });
+            history.push({ role: "user", content: adapter.getErrorFeedback("Previous execution failed") });
             continue;
           }
 
@@ -394,12 +428,7 @@ console.log(JSON.stringify(hits, null, 2));
         }
 
         // Add feedback to prompt the model to provide code
-        const feedback = `No code block found. You MUST write JavaScript code:
-\`\`\`javascript
-const hits = grep("keyword");
-console.log(JSON.stringify(hits, null, 2));
-\`\`\``;
-        history.push({ role: "user", content: feedback });
+        history.push({ role: "user", content: adapter.getNoCodeFeedback() });
       }
     }
 

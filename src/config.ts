@@ -29,6 +29,8 @@ export interface ProviderConfig {
   baseUrl: string;
   apiKey?: string;
   model?: string;
+  /** Adapter name for model-specific prompting (e.g., "qwen", "deepseek"). Auto-detected from model name if not specified. */
+  adapter?: string;
   options?: LLMOptions;
 }
 
