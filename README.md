@@ -275,6 +275,62 @@ If using a different model, you may need to adjust `src/rlm.ts`:
 
 Larger models (30B+) typically need fewer accommodations as they follow instructions more reliably.
 
+### Query Complexity and Model Capabilities
+
+**Symptom**: The model finds the right data but produces incorrect results, or returns 0/empty when values clearly exist.
+
+**Cause**: Smaller models (7B) can struggle to write correct parsing logic, especially for complex data formats. The model may write regex patterns that don't match the actual data format, or use flawed extraction logic.
+
+**What Works Well** (with 7B models):
+
+| Query Type | Example | Why It Works |
+|------------|---------|--------------|
+| Counting | "Count how many ERROR entries exist" | Simple `.length` on search results |
+| Listing | "List all unique log levels" | Direct iteration, no parsing |
+| Searching | "Find all lines containing 'timeout'" | Uses built-in `grep()` directly |
+| Existence | "Does this document mention 'authentication'?" | Boolean check on results |
+
+**What Struggles** (with 7B models):
+
+| Query Type | Example | Why It Fails |
+|------------|---------|--------------|
+| Currency parsing | "Sum all dollar amounts like $1,234,567" | Model writes regex expecting decimals (`.00`) when data has none |
+| Complex extraction | "Extract the reason field from each error" | Model parses wrong part of the string |
+| Multi-step aggregation | "Group errors by type and count each" | Logic errors in categorization code |
+| Format-sensitive parsing | "Parse the JSON in each log line" | Model assumes wrong data format |
+
+**Solutions**:
+
+1. **Use simpler queries** - Break complex tasks into simpler steps:
+   ```bash
+   # Instead of: "Sum all sales figures"
+   # Use: "List all lines containing SALES_DATA"
+   # Then process the output yourself
+   ```
+
+2. **Be explicit about formats** - Tell the model exactly what to expect:
+   ```bash
+   # Bad: "Extract the numbers"
+   # Good: "Extract numbers formatted as X,XXX,XXX (no decimals, with commas)"
+   ```
+
+3. **Use a larger model** - 30B+ models write significantly better parsing code
+
+4. **Leverage the raw output** - Even when parsing fails, the system often returns the raw matched data which you can process externally
+
+**Example of Model Limitation**:
+
+```bash
+# Query: "Sum all SALES_DATA values"
+# Data format: SALES_DATA_NORTH: $2,340,000
+
+# Model writes: /\$\d{1,3}(,\d{3})*\.\d{2}/  (expects $1,234.56)
+# Actual format: $2,340,000 (no decimals)
+# Result: 0 (regex doesn't match)
+```
+
+The infrastructure correctly finds all SALES_DATA lines, but the model's regex assumes a different number format. This is a model capability issue, not an infrastructure bug.
+
 ## Development
 
 ```bash
