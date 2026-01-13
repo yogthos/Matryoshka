@@ -1,12 +1,22 @@
 /**
  * Sandbox Tools for Synthesis
  * Exposes synthesis capabilities to the LLM in the sandbox
+ *
+ * Uses the relational synthesis engine (evalo) for Barliman-style
+ * constraint-based program synthesis.
  */
 
 import vm from "node:vm";
 import { FUZZY_SEARCH_IMPL } from "../fuzzy-search.js";
 import { SynthesisCoordinator } from "./coordinator.js";
 import type { SandboxResult, SandboxOptions } from "../sandbox.js";
+import {
+  synthesizeExtractor as relationalSynthesize,
+  compileToFunction,
+  compileToFunctionString,
+  prettyPrint,
+  type Example,
+} from "./evalo/index.js";
 
 interface LLMQueryOptions {
   format?: "json" | "text";
@@ -114,6 +124,32 @@ export async function createSandboxWithSynthesis(
         log(`  ... and ${examples.length - 3} more`);
       }
 
+      // Try relational synthesis first (Barliman-style)
+      try {
+        const relationalExamples: Example[] = examples.map(e => ({
+          input: e.input,
+          output: e.output as string | number | boolean | null,
+        }));
+
+        const startTime = Date.now();
+        const extractors = relationalSynthesize(relationalExamples);
+
+        if (extractors.length > 0) {
+          const extractor = extractors[0];
+          const fn = compileToFunction(extractor);
+          const timeMs = Date.now() - startTime;
+
+          log(`[Synthesis] SUCCESS (relational): ${prettyPrint(extractor)}`);
+          log(`[Synthesis] Time: ${timeMs}ms`);
+          return fn;
+        }
+      } catch (err) {
+        // Log but continue to fallback
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log(`[Synthesis] Relational synthesis failed: ${errMsg}`);
+      }
+
+      // Fallback to coordinator-based synthesis
       const result = coordinator.synthesize({
         type: "extractor",
         description: "sandbox_synthesis",
@@ -122,7 +158,7 @@ export async function createSandboxWithSynthesis(
       });
 
       if (result.success && result.extractor) {
-        log(`[Synthesis] SUCCESS: Synthesized extractor function`);
+        log(`[Synthesis] SUCCESS (fallback): Synthesized extractor function`);
         log(`[Synthesis] Generated code: ${result.extractorCode?.slice(0, 100)}...`);
         log(`[Synthesis] Time: ${result.synthesisTimeMs}ms`);
         return result.extractor.test;
@@ -157,6 +193,27 @@ export async function createSandboxWithSynthesis(
 
       log(`[Synthesis] get_extractor_code called with ${examples.length} constraints`);
 
+      // Try relational synthesis first (Barliman-style)
+      try {
+        const relationalExamples: Example[] = examples.map(e => ({
+          input: e.input,
+          output: e.output as string | number | boolean | null,
+        }));
+
+        const extractors = relationalSynthesize(relationalExamples);
+
+        if (extractors.length > 0) {
+          const extractor = extractors[0];
+          const code = compileToFunctionString(extractor);
+          log(`[Synthesis] SUCCESS (relational): ${code}`);
+          return code;
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log(`[Synthesis] Relational synthesis failed: ${errMsg}`);
+      }
+
+      // Fallback to coordinator-based synthesis
       const result = coordinator.synthesize({
         type: "extractor",
         description: "sandbox_synthesis",
@@ -165,7 +222,7 @@ export async function createSandboxWithSynthesis(
       });
 
       if (result.success && result.extractorCode) {
-        log(`[Synthesis] SUCCESS: Generated code: ${result.extractorCode.slice(0, 100)}...`);
+        log(`[Synthesis] SUCCESS (fallback): Generated code: ${result.extractorCode.slice(0, 100)}...`);
         return result.extractorCode;
       }
 
