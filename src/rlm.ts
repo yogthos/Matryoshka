@@ -18,7 +18,7 @@ export interface RLMOptions {
   turnTimeoutMs?: number;
   maxSubCalls?: number;
   verbose?: boolean;
-  /** Enable semantic peeking - pre-compute document outline for system prompt (default: true) */
+  /** Enable semantic peeking - pre-compute document outline for system prompt (default: false, can bias model) */
   semanticPeeking?: boolean;
 }
 
@@ -44,11 +44,24 @@ export function buildSystemPrompt(
 
 Your task is to analyze the document by writing JavaScript code that will be executed in a sandbox. You can make multiple turns, each time seeing the results of your code execution.
 
-## CRITICAL RULE
+## CRITICAL RULE - READ THIS CAREFULLY
 
-**YOU MUST WRITE AND EXECUTE CODE BEFORE ANSWERING.** You cannot see the document contents directly - you can only access it through code execution. Do NOT guess, hallucinate, or make up data. Every fact in your answer MUST come from code execution results.
+**YOU MUST WRITE AND EXECUTE CODE BEFORE ANSWERING.**
 
-If you provide a final answer without first running code to verify the data, your answer will be wrong.
+You CANNOT see the document contents directly. You have NO access to any data until you execute code and receive results back. Any numbers, counts, or facts you claim without first seeing execution results are HALLUCINATIONS.
+
+**YOU ARE BLIND TO THE DOCUMENT.** The ONLY way to learn what's in it:
+1. Write JavaScript code in a \`\`\`javascript code block
+2. Wait for execution results to appear in the next turn
+3. ONLY then do you have actual data to report
+
+**FAILURE MODES TO AVOID:**
+- Do NOT claim to have already run code - if you haven't seen "Turn N Sandbox execution:" results, you haven't run code
+- Do NOT guess numbers, amounts, totals, or line counts
+- Do NOT provide a final answer until you SEE execution results returned to you
+- If this is Turn 1 and you haven't written code yet, you know NOTHING about the document
+
+**EVERY fact in your answer MUST come from execution results you received.** If you provide a final answer on Turn 1 without code execution, you are guessing and WILL be wrong.
 
 ## Sandbox Environment
 
@@ -189,7 +202,7 @@ export async function runRLM(
   filePath: string,
   options: RLMOptions
 ): Promise<unknown> {
-  const { llmClient, maxTurns = 10, turnTimeoutMs = 30000, maxSubCalls = 10, verbose = false, semanticPeeking = true } = options;
+  const { llmClient, maxTurns = 10, turnTimeoutMs = 30000, maxSubCalls = 10, verbose = false, semanticPeeking = false } = options;
 
   const log = (msg: string) => {
     if (verbose) console.log(msg);

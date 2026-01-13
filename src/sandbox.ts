@@ -599,11 +599,14 @@ export function formatOutlineForPrompt(outline: DocumentOutline): string {
 
   if (outline.sections.length > 0) {
     lines.push("");
-    lines.push("**Sections found:**");
+    lines.push("**Sections found** (use `context.slice()` or `locate_line()` to read actual content):");
     for (const section of outline.sections.slice(0, 10)) {
-      // Limit to first 10
+      // Limit to first 10, show only structural hint without full title to prevent hallucination
       const indent = "  ".repeat(section.level - 1);
-      lines.push(`${indent}- Line ${section.lineNum}: "${section.title}"`);
+      // Truncate title to first 3 words to give hint without revealing data
+      const titleHint = section.title.split(/\s+/).slice(0, 3).join(" ");
+      const truncated = titleHint.length < section.title.length ? `${titleHint}...` : titleHint;
+      lines.push(`${indent}- Line ${section.lineNum}: "${truncated}"`);
     }
     if (outline.sections.length > 10) {
       lines.push(`  ... and ${outline.sections.length - 10} more sections`);
