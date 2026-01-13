@@ -10,6 +10,7 @@ import type { ModelAdapter, AdapterFactory } from "./types.js";
 import { createBaseAdapter } from "./base.js";
 import { createQwenAdapter } from "./qwen.js";
 import { createDeepSeekAdapter } from "./deepseek.js";
+import { createQwenSynthesisAdapter } from "./qwen-synthesis.js";
 
 // Re-export types
 export type { ModelAdapter, FinalVarMarker, AdapterFactory } from "./types.js";
@@ -21,6 +22,7 @@ const adapterFactories: Record<string, AdapterFactory> = {
   base: createBaseAdapter,
   qwen: createQwenAdapter,
   deepseek: createDeepSeekAdapter,
+  "qwen-synthesis": createQwenSynthesisAdapter,
 };
 
 /**

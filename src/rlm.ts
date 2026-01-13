@@ -11,7 +11,7 @@ import { createSandbox, Sandbox } from "./sandbox.js";
 import { createToolRegistry, getToolInterfaces } from "./tools.js";
 import { tryFixCode } from "./code-fixer.js";
 import type { LLMQueryFn } from "./llm/types.js";
-import type { ModelAdapter } from "./adapters/types.js";
+import type { ModelAdapter, FinalVarMarker } from "./adapters/types.js";
 import { createBaseAdapter } from "./adapters/base.js";
 
 // Re-export types for backwards compatibility
@@ -228,6 +228,9 @@ export async function runRLM(
   let noCodeCount = 0;
   // Track last executed code to detect repetition
   let lastCode = "";
+  // Track computed results to detect when model has answer but won't terminate
+  let lastComputedValue = "";
+  let computedValueCount = 0;
 
   try {
     for (let turn = 1; turn <= maxTurns; turn++) {
@@ -258,7 +261,27 @@ export async function runRLM(
             history.push({ role: "user", content: feedback });
             continue;
           }
-          return finalInCode[1].trim();
+          const extractedAnswer = finalInCode[1].trim();
+          // Validate the extracted answer doesn't look like code
+          // (model might have put FINAL markers inside console.log strings)
+          const looksLikeCode = /console\.log|function\s*\(|const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|\);|\(\s*["']/.test(extractedAnswer);
+          if (looksLikeCode) {
+            log(`[Turn ${turn}] Rejecting - extracted content looks like code, not an answer`);
+            const feedback = `ERROR: You put <<<FINAL>>> markers inside your code/strings, not after the code block.
+
+The FINAL markers must be OUTSIDE and AFTER your code block:
+\`\`\`javascript
+console.log("done");
+\`\`\`
+<<<FINAL>>>
+Your actual answer here (plain text, not code)
+<<<END>>>
+
+Try again with proper formatting.`;
+            history.push({ role: "user", content: feedback });
+            continue;
+          }
+          return extractedAnswer;
         }
 
         codeExecuted = true;
@@ -332,12 +355,40 @@ Write NEW code now:`;
           } else {
             // Save meaningful output - prefer computed results over raw data dumps
             // Look for patterns like "Total: X", "Result: X", "Answer: X", or assignments
-            const hasComputedResult = logsText.match(/(?:total|sum|result|answer|count|average|mean)[^:]*:\s*[\d,.]+/i);
+            const computedMatch = logsText.match(/(?:total|sum|result|answer|count|average|mean)[^:]*:\s*([\d,.]+)/i);
             // Look for any substantial numeric data (4+ digits) or structured output
             const hasRawData = logsText.match(/[\d,]{4,}|"[^"]+"\s*:/);
 
-            if (hasComputedResult) {
-              // Prefer computed results
+            if (computedMatch) {
+              // Extract the numeric value to track repeats
+              const currentValue = computedMatch[1].replace(/,/g, "");
+
+              if (currentValue === lastComputedValue) {
+                computedValueCount++;
+                log(`[Turn ${turn}] Same computed value "${currentValue}" seen ${computedValueCount + 1} times`);
+
+                // If we've seen the same computed result 2+ times, the model has the answer
+                if (computedValueCount >= 2) {
+                  log(`[Turn ${turn}] Model found answer but won't terminate. Auto-returning.`);
+                  // Extract the cleanest form of the answer from the logs
+                  // Look for the line that has the computed result
+                  const answerLine = result.logs.find(line =>
+                    /(?:total|sum|result|answer|count|average|mean)[^:]*:/i.test(line)
+                  );
+                  return answerLine || logsText;
+                }
+
+                // Tell the model to terminate
+                feedback += `\nYou have computed the answer: ${logsText}\nNow OUTPUT THE FINAL ANSWER using these markers:\n`;
+                feedback += `<<<FINAL>>>\n${logsText}\n<<<END>>>\n`;
+                feedback += `Do NOT compute again. Just output the FINAL markers above.`;
+              } else {
+                // New computed value
+                lastComputedValue = currentValue;
+                computedValueCount = 0;
+              }
+
+              // Save as meaningful output
               lastMeaningfulOutput = logsText;
               doneCount = 0;
             } else if (hasRawData && !lastMeaningfulOutput) {
