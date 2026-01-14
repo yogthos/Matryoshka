@@ -10,25 +10,25 @@ Based on the [Recursive Language Models paper](https://arxiv.org/abs/2512.24601)
 
 ## How It Works
 
-Unlike traditional approaches where an LLM writes arbitrary code, RLM uses a **constrained symbolic language** called Nucleus. The LLM outputs S-expressions (like Lisp), which are parsed, type-checked, and executed by a logic engine.
+Unlike traditional approaches where an LLM writes arbitrary code, RLM uses **[Nucleus](https://github.com/michaelwhitford/nucleus)**—a constrained symbolic language based on S-expressions. The LLM outputs Nucleus commands, which are parsed, type-checked, and executed by **Lattice**, our logic engine.
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   User Query    │────▶│   LLM Reasons   │────▶│  S-Expression   │
+│   User Query    │────▶│   LLM Reasons   │────▶│ Nucleus Command │
 │ "total sales?"  │     │  about intent   │     │  (sum RESULTS)  │
 └─────────────────┘     └─────────────────┘     └────────┬────────┘
                                                          │
 ┌─────────────────┐     ┌─────────────────┐     ┌────────▼────────┐
-│  Final Answer   │◀────│  Logic Engine   │◀────│   LC Parser     │
-│   13,000,000    │     │   Executes      │     │   Validates     │
+│  Final Answer   │◀────│ Lattice Engine  │◀────│     Parser      │
+│   13,000,000    │     │    Executes     │     │    Validates    │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
 **Why this works better than code generation:**
 
-1. **Reduced entropy** - S-expressions have a rigid grammar with fewer valid outputs than JavaScript
+1. **Reduced entropy** - Nucleus has a rigid grammar with fewer valid outputs than JavaScript
 2. **Fail-fast validation** - Parser rejects malformed commands before execution
-3. **Safe execution** - The logic engine only executes known operations, no arbitrary code
+3. **Safe execution** - Lattice only executes known operations, no arbitrary code
 4. **Small model friendly** - 7B models handle symbolic grammars better than freeform code
 
 ## Architecture
@@ -52,16 +52,16 @@ The LLM outputs commands in the Nucleus DSL—an S-expression language designed 
 <<<FINAL>>>13000000<<<END>>>
 ```
 
-### The Logic Engine
+### The Lattice Engine
 
-The logic engine (`src/logic/`) processes Nucleus commands:
+The Lattice engine (`src/logic/`) processes Nucleus commands:
 
-1. **LC Parser** (`lc-parser.ts`) - Parses S-expressions into an AST
+1. **Parser** (`lc-parser.ts`) - Parses S-expressions into an AST
 2. **Type Inference** (`type-inference.ts`) - Validates types before execution
 3. **Constraint Resolver** (`constraint-resolver.ts`) - Handles symbolic constraints like `[Σ⚡μ]`
-4. **LC Solver** (`lc-solver.ts`) - Executes commands against the document
+4. **Solver** (`lc-solver.ts`) - Executes commands against the document
 
-The solver uses **miniKanren** (a relational programming engine) for pattern classification and filtering operations.
+Lattice uses **miniKanren** (a relational programming engine) for pattern classification and filtering operations.
 
 ### Pre-Search Optimization
 
@@ -95,15 +95,15 @@ The LLM does **reasoning**, not code generation:
 3. **Verifies results** - Checks if the current results answer the query
 4. **Iterates** - Refines search if results are too broad or narrow
 
-The LLM never writes JavaScript. It outputs symbolic commands that the logic engine executes safely.
+The LLM never writes JavaScript. It outputs Nucleus commands that Lattice executes safely.
 
 ### Components Summary
 
 | Component | Purpose |
 |-----------|---------|
-| **Nucleus Adapter** | Prompts LLM to output S-expressions |
-| **LC Parser** | Parses S-expressions to AST |
-| **LC Solver** | Executes commands against document |
+| **Nucleus Adapter** | Prompts LLM to output Nucleus commands |
+| **Lattice Parser** | Parses S-expressions to AST |
+| **Lattice Solver** | Executes commands against document |
 | **miniKanren** | Relational engine for classification |
 | **Pre-Search** | Extracts keywords and pre-runs grep |
 | **RAG Hints** | Few-shot examples from past successes |
@@ -236,8 +236,8 @@ $ rlm "What is the total of all north sales data values?" ./report.txt --verbose
 [Turn 1/10] Querying LLM...
 [Turn 1] Term: (sum RESULTS)
 [Turn 1] Console output:
-  [Solver] Summing 1 values
-  [Solver] Sum = 2340000
+  [Lattice] Summing 1 values
+  [Lattice] Sum = 2340000
 [Turn 1] Result: 2340000
 
 ──────────────────────────────────────────────────
@@ -338,10 +338,10 @@ npm run typecheck                     # Type check
 ```
 src/
 ├── adapters/           # Model-specific prompting
-│   ├── nucleus.ts      # S-expression DSL adapter
+│   ├── nucleus.ts      # Nucleus DSL adapter
 │   └── types.ts        # Adapter interface
-├── logic/              # Logic engine
-│   ├── lc-parser.ts    # S-expression parser
+├── logic/              # Lattice engine
+│   ├── lc-parser.ts    # Nucleus parser
 │   ├── lc-solver.ts    # Command executor (uses miniKanren)
 │   ├── type-inference.ts
 │   └── constraint-resolver.ts
@@ -356,6 +356,7 @@ src/
 
 This project incorporates ideas and code from:
 
+- **[Nucleus](https://github.com/michaelwhitford/nucleus)** - A symbolic S-expression language by Michael Whitford. RLM uses Nucleus syntax for the constrained DSL that the LLM outputs, providing a rigid grammar that reduces model errors.
 - **[ramo](https://github.com/wjlewis/ramo)** - A miniKanren implementation in TypeScript by Will Lewis. Used for constraint-based program synthesis.
 - **[Barliman](https://github.com/webyrd/Barliman)** - A prototype smart editor by William Byrd that uses program synthesis to assist programmers. The Barliman-style approach of providing input/output constraints instead of code inspired the synthesis workflow.
 
