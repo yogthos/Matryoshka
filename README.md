@@ -119,7 +119,7 @@ npm install -g matryoshka-rlm
 ### npx (no install)
 
 ```bash
-npx matryoshka-rlm "Summarize this document" ./document.txt
+npx matryoshka-rlm "What is the total of all sales values?" ./report.txt
 ```
 
 ### From source
@@ -162,10 +162,10 @@ Copy `config.example.json` to `config.json` and configure your LLM provider:
 
 ```bash
 # Basic usage
-rlm "Summarize this document" ./path/to/document.txt
+rlm "What is the total of all sales values?" ./report.txt
 
 # With options
-rlm "Find all error codes" ./logs.txt --max-turns 15 --verbose
+rlm "Count all ERROR entries" ./logs.txt --max-turns 15 --verbose
 
 # See all options
 rlm --help
@@ -217,7 +217,7 @@ const llmClient = createLLMClient("ollama", {
   options: { temperature: 0.2 }
 });
 
-const result = await runRLM("What are the main themes?", "./book.txt", {
+const result = await runRLM("What is the total of all sales values?", "./report.txt", {
   llmClient,
   maxTurns: 10,
   turnTimeoutMs: 30000,
