@@ -69,8 +69,9 @@ export interface ModelAdapter {
    * Used to remind model about language requirements between turns
    * @param resultCount - Optional count of results from execution (helps tailor feedback)
    * @param previousCount - Optional count of results before this operation
+   * @param query - Optional original query for context
    */
-  getSuccessFeedback(resultCount?: number, previousCount?: number): string;
+  getSuccessFeedback(resultCount?: number, previousCount?: number, query?: string): string;
 
   /**
    * Get feedback message when model repeats the same code

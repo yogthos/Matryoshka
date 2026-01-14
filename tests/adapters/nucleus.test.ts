@@ -24,21 +24,21 @@ describe("Nucleus Adapter", () => {
   describe("buildSystemPrompt", () => {
     const prompt = adapter.buildSystemPrompt(10000, "");
 
-    it("should explain DSL forms", () => {
+    it("should explain core operations", () => {
       expect(prompt).toContain("grep");
-      expect(prompt).toContain("filter");
-      expect(prompt).toContain("map");
+      expect(prompt).toContain("sum");
+      expect(prompt).toContain("count");
     });
 
-    it("should explain commands", () => {
+    it("should explain available commands", () => {
       expect(prompt).toContain("COMMANDS");
       expect(prompt).toContain("grep");
       expect(prompt).toContain("sum");
     });
 
-    it("should be concise", () => {
-      // Simplified prompt should be under 500 chars
-      expect(prompt.length).toBeLessThan(600);
+    it("should be reasonably sized", () => {
+      // Prompt should be under 800 chars for efficiency
+      expect(prompt.length).toBeLessThan(800);
     });
 
     it("should show final answer format", () => {
@@ -149,13 +149,12 @@ describe("Nucleus Adapter", () => {
 
   describe("getSuccessFeedback", () => {
     it("should show count and next prompt when results exist", () => {
-      const feedback = adapter.getSuccessFeedback(5);
+      const feedback = adapter.getSuccessFeedback(5, undefined, "test query");
       expect(feedback).toContain("5");
-      expect(feedback).toContain("RESULTS");
       expect(feedback).toContain("Next:");
     });
 
-    it("should encourage different keyword when results empty", () => {
+    it("should suggest different terms when results empty", () => {
       const feedback = adapter.getSuccessFeedback(0);
       expect(feedback).toContain("different");
       expect(feedback).toContain("Next:");
@@ -164,7 +163,7 @@ describe("Nucleus Adapter", () => {
     it("should warn when filter matched nothing", () => {
       const feedback = adapter.getSuccessFeedback(0, 10);
       expect(feedback).toContain("Filter");
-      expect(feedback).toContain("_1");
+      expect(feedback).toContain("different");
     });
   });
 

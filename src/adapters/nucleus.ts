@@ -24,19 +24,17 @@ function buildSystemPrompt(
   // Determine document size category
   const sizeCategory = contextLength < 2000 ? "SMALL" : "LARGE";
 
-  return `You analyze documents. Output ONE command per turn.
+  return `You analyze documents to answer queries. Output ONE command per turn.
 
-COMMANDS (replace ___ with your values):
-(grep "___")      - search for keyword from query
-(filter RESULTS (lambda x (match x "___" 0))) - keep matching lines
-(map RESULTS (lambda x (match x "[0-9]+" 0))) - extract numbers
-(sum RESULTS)     - add all numbers in RESULTS
-(count RESULTS)   - count items in RESULTS
+COMMANDS:
+(grep "pattern")                                    - search document
+(filter RESULTS (lambda x (match x "pattern" 0)))   - filter results
+(sum RESULTS)                                       - auto-extracts and sums numbers from result lines
+(count RESULTS)                                     - count results
 
-After grep succeeds, use RESULTS directly:
-- To count: (count RESULTS)
-- To sum: (sum RESULTS)
-- To answer: <<<FINAL>>>your answer<<<END>>>
+Note: (sum RESULTS) automatically extracts numbers like "$2,340,000" from each line.
+
+Output final answer as: <<<FINAL>>>12345<<<END>>> (replace 12345 with actual value)
 
 ${hints?.hintsText || ""}${hints?.selfCorrectionText || ""}`;
 }
@@ -213,8 +211,9 @@ function extractFinalAnswer(
 ): string | FinalVarMarker | null {
   if (!response) return null;
 
-  // Look for <<<FINAL>>> ... <<<END>>> markers (standard format)
-  const finalMatch = response.match(/<<<FINAL>>>([\s\S]*?)<<<END>>>/);
+  // Look for FINAL markers with various bracket styles (<<<, >>>, or mixed)
+  // Models often get the brackets wrong
+  const finalMatch = response.match(/(?:<<<|>>>)FINAL(?:<<<|>>>)([\s\S]*?)(?:<<<|>>>)END(?:<<<|>>>)/);
   if (finalMatch) {
     return finalMatch[1].trim();
   }
@@ -249,11 +248,12 @@ function extractFinalAnswer(
  * Feedback when no LC term found
  */
 function getNoCodeFeedback(): string {
-  return `Parse error: no valid command found. Use one of:
-(grep "___")       <- put keyword from query
-(count RESULTS)    <- if you already searched
-(sum RESULTS)      <- to add numbers
-<<<FINAL>>>___<<<END>>>  <- final answer
+  return `Parse error: no valid command. Extract a keyword from the query and search:
+
+(grep "KEYWORD")   <- extract keyword from query, e.g., "SALES", "ERROR", "price"
+
+Then aggregate: (sum RESULTS) or (count RESULTS)
+Then answer: <<<FINAL>>>answer<<<END>>>
 
 Next:`;
 }
@@ -277,32 +277,32 @@ function getErrorFeedback(error: string, code?: string): string {
  * Feedback after successful execution
  * @param resultCount - Number of results from execution
  * @param previousCount - Number of results before this operation
+ * @param query - The original query for context
  */
-function getSuccessFeedback(resultCount?: number, previousCount?: number): string {
+function getSuccessFeedback(resultCount?: number, previousCount?: number, query?: string): string {
   if (resultCount === 0 && previousCount && previousCount > 0) {
-    return `Filter matched nothing. Use _1 with simpler pattern.
+    return `Filter matched nothing. Try different pattern.
 
 Next:`;
   }
 
   if (resultCount === 0) {
-    return `No matches. Try different keyword from the query.
+    return `No matches. Try different search terms.
 
 Next:`;
   }
 
   if (resultCount && resultCount > 0) {
-    return `Found ${resultCount} matches in RESULTS.
+    return `Found ${resultCount} matches.
 
-To count them: (count RESULTS)
-To sum numbers: (sum RESULTS)
-To answer: <<<FINAL>>>___<<<END>>>
+Check: Do these results answer "${query || 'the query'}"?
+- If yes: (sum RESULTS) or (count RESULTS) then output answer
+- If too broad: (filter RESULTS (lambda x (match x "specific_term" 0)))
 
 Next:`;
   }
 
-  return `Done. Output your answer:
-<<<FINAL>>>___<<<END>>>
+  return `Done. Output your answer.
 
 Next:`;
 }
