@@ -31,14 +31,14 @@ describe("Nucleus Adapter", () => {
     });
 
     it("should explain workflow", () => {
-      expect(prompt).toContain("Turn 1");
-      expect(prompt).toContain("Turn 2");
-      expect(prompt).toContain("RESULTS");
+      expect(prompt).toContain("WORKFLOW");
+      expect(prompt).toContain("grep");
+      expect(prompt).toContain("sum");
     });
 
-    it("should emphasize S-expression output", () => {
-      expect(prompt).toContain("S-expression");
-      expect(prompt).toContain("SEARCH STRATEGY");
+    it("should be concise", () => {
+      // Simplified prompt should be under 500 chars
+      expect(prompt.length).toBeLessThan(600);
     });
 
     it("should show final answer format", () => {
@@ -128,61 +128,58 @@ describe("Nucleus Adapter", () => {
     const feedback = adapter.getNoCodeFeedback();
 
     it("should show example S-expression", () => {
-      expect(feedback).toContain("grep");
+      expect(feedback).toContain("sum");
       expect(feedback).toContain("(");
     });
   });
 
   describe("getErrorFeedback", () => {
-    it("should show the failed code", () => {
-      const feedback = adapter.getErrorFeedback("parse error", '{"bad": "json"}');
-      expect(feedback).toContain('{"bad": "json"}');
+    it("should detect Python-style lambda", () => {
+      const feedback = adapter.getErrorFeedback("parse error", '(lambda x: "test" in x)');
+      expect(feedback).toContain("syntax");
     });
 
     it("should show valid commands", () => {
       const feedback = adapter.getErrorFeedback("any error");
       expect(feedback).toContain("grep");
       expect(feedback).toContain("filter");
-      expect(feedback).toContain("FINAL");
     });
   });
 
   describe("getSuccessFeedback", () => {
-    it("should mention RESULTS and FINAL when results exist", () => {
+    it("should show count and next steps when results exist", () => {
       const feedback = adapter.getSuccessFeedback(5);
-      expect(feedback).toContain("RESULTS");
+      expect(feedback).toContain("5");
       expect(feedback).toContain("FINAL");
     });
 
-    it("should encourage different search when results empty", () => {
+    it("should encourage different keyword when results empty", () => {
       const feedback = adapter.getSuccessFeedback(0);
-      expect(feedback).toContain("DIFFERENT search");
+      expect(feedback).toContain("different");
     });
 
-    it("should warn when filter removed all results", () => {
+    it("should warn when filter matched nothing", () => {
       const feedback = adapter.getSuccessFeedback(0, 10);
-      expect(feedback).toContain("Filter removed all results");
+      expect(feedback).toContain("Filter");
       expect(feedback).toContain("_1");
     });
   });
 
   describe("getRepeatedCodeFeedback", () => {
-    it("should encourage reporting the answer when results exist", () => {
+    it("should encourage using RESULTS when results exist", () => {
       const feedback = adapter.getRepeatedCodeFeedback(5);
-      expect(feedback).toContain("REPORT YOUR ANSWER");
       expect(feedback).toContain("RESULTS");
-      expect(feedback).toContain("<<<FINAL>>>");
+      expect(feedback).toContain("FINAL");
     });
 
-    it("should suggest different search when results empty", () => {
+    it("should suggest different keyword when results empty", () => {
       const feedback = adapter.getRepeatedCodeFeedback(0);
-      expect(feedback).toContain("DIFFERENT search");
-      expect(feedback).toContain("single keywords");
+      expect(feedback).toContain("different");
     });
 
-    it("should default to answer encouragement with no count", () => {
+    it("should default to RESULTS guidance with no count", () => {
       const feedback = adapter.getRepeatedCodeFeedback();
-      expect(feedback).toContain("REPORT YOUR ANSWER");
+      expect(feedback).toContain("RESULTS");
     });
   });
 });

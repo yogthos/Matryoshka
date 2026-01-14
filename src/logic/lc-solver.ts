@@ -232,6 +232,17 @@ function evaluate(
           const num = parseFloat(cleaned);
           return isNaN(num) ? acc : acc + num;
         }
+        // Handle grep result objects - extract number from line
+        if (typeof val === "object" && val !== null && "line" in val) {
+          const line = (val as { line: string }).line;
+          // Look for dollar amounts like "$1,234,567" or plain numbers
+          const numMatch = line.match(/\$?([\d,]+(?:\.\d+)?)/);
+          if (numMatch) {
+            const cleaned = numMatch[1].replace(/,/g, "");
+            const num = parseFloat(cleaned);
+            return isNaN(num) ? acc : acc + num;
+          }
+        }
         return acc;
       }, 0);
       log(`[Solver] Sum = ${total}`);

@@ -21,52 +21,19 @@ function buildSystemPrompt(
   toolInterfaces: string,
   hints?: RAGHints
 ): string {
-  return `You analyze documents using S-expressions. Output ONLY S-expressions or FINAL answers.
+  return `You analyze documents. Output S-expressions or <<<FINAL>>>...<<<END>>>.
 
-## OUTPUT FORMAT
+COMMANDS:
+(grep "word")                    - search
+(filter RESULTS (lambda x (match x "word" 0)))  - keep matches
+(map RESULTS (lambda x (match x "[0-9]+" 0)))   - extract
+(sum RESULTS)                    - add numbers
+(count RESULTS)                  - count items
 
-Output EXACTLY ONE of:
-1. S-expression: (grep "keyword") or (filter RESULTS ...)
-2. Final answer: <<<FINAL>>> ... <<<END>>>
-
-## SEARCH STRATEGY
-
-IMPORTANT: Search for KEYWORDS from the query, not special characters.
-- For "total sales": (grep "SALES") or (grep "sales")
-- For "payment errors": (grep "payment") or (grep "error")
-- For "temperature readings": (grep "TEMP") or (grep "temperature")
-
-DO NOT search for symbols like "$" or "%" - search for text labels instead.
-
-## OPERATIONS
-
-Search:       (grep "keyword")
-Filter:       (filter RESULTS (lambda x (match x "pattern" 0)))
-Extract:      (map RESULTS (lambda x (match x "regex" 1)))
-Sum numbers:  (sum (map RESULTS (lambda x (parseFloat (match x "[0-9,]+" 0)))))
-Count:        (count RESULTS)
-
-## WORKFLOW
-
-1. SEARCH: Find relevant lines with (grep "keyword")
-2. FILTER (if needed): Narrow down with (filter RESULTS ...)
-3. EXTRACT (if needed): Pull out values with (map RESULTS ...)
-4. AGGREGATE (if needed): Sum or count with (sum ...) or (count ...)
-5. REPORT: Output final answer with <<<FINAL>>> ... <<<END>>>
-
-## EXAMPLE: Finding totals
-
-Query: "what is the total of all sales values?"
-
-Turn 1: (grep "SALES")
-Turn 2: (map RESULTS (lambda x (match x "[0-9,]+" 0)))
-Turn 3: (sum RESULTS)
-Turn 4: <<<FINAL>>>
-The total sales is: [value from RESULTS]
-<<<END>>>
+WORKFLOW: grep → filter → map → sum → <<<FINAL>>>
 
 ${hints?.hintsText || ""}${hints?.selfCorrectionText || ""}
-## BEGIN:`;
+BEGIN:`;
 }
 
 /**
@@ -221,6 +188,15 @@ function extractCode(response: string): string | null {
     }
   }
 
+  // FALLBACK: Auto-wrap common commands without parentheses
+  // E.g., "sum RESULTS" -> "(sum RESULTS)"
+  const noParenCommand = response.match(/\b(sum|count|grep|filter|map)\s+(RESULTS|_\d+|"[^"]+")/i);
+  if (noParenCommand) {
+    const cmd = noParenCommand[1].toLowerCase();
+    const arg = noParenCommand[2];
+    return `(${cmd} ${arg})`;
+  }
+
   return null;
 }
 
@@ -268,52 +244,25 @@ function extractFinalAnswer(
  * Feedback when no LC term found
  */
 function getNoCodeFeedback(): string {
-  return `ERROR: Invalid output. You MUST output exactly one of:
-
-OPTION 1 - Search:
-(grep "keyword")
-
-OPTION 2 - Filter previous results:
-(filter RESULTS (lambda x (match x "pattern" 0)))
-
-OPTION 3 - Report final answer:
-<<<FINAL>>>
-The answer based on my analysis: [your answer]
-<<<END>>>
-
-Output ONLY the option text. No explanations. No JSON.`;
+  return `Parse error. Need parentheses:
+(sum RESULTS)
+or
+<<<FINAL>>>answer<<<END>>>`;
 }
 
 /**
  * Feedback when LC parsing fails
  */
 function getErrorFeedback(error: string, code?: string): string {
-  // Check for common error patterns
-  if (code && !code.match(/^\s*\(/)) {
-    return `ERROR: "${code}" is not a valid S-expression.
-
-Valid S-expressions start with ( and a command:
-- (grep "pattern")
-- (filter RESULTS (lambda x (match x "pattern" 0)))
-- (map RESULTS (lambda x (match x "regex" 1)))
-
-Or report your answer:
-<<<FINAL>>>
-Your answer here
-<<<END>>>`;
+  // Check for Python-style lambda (common mistake)
+  if (code && code.includes("lambda") && code.includes(":")) {
+    return `Wrong syntax. Use: (filter RESULTS (lambda x (match x "word" 0)))`;
   }
 
-  return `ERROR: Parse failed: ${error}
-
-Valid commands:
-- (grep "pattern")
-- (filter RESULTS (lambda x (match x "pattern" 0)))
-- (map RESULTS (lambda x (match x "regex" 1)))
-
-Or:
-<<<FINAL>>>
-Your answer here
-<<<END>>>`;
+  return `Syntax error. Use:
+(grep "word")
+(filter RESULTS (lambda x (match x "word" 0)))
+(sum RESULTS)`;
 }
 
 /**
@@ -322,44 +271,19 @@ Your answer here
  * @param previousCount - Number of results before this operation
  */
 function getSuccessFeedback(resultCount?: number, previousCount?: number): string {
-  // If filtering reduced to 0, the filter was probably wrong
   if (resultCount === 0 && previousCount && previousCount > 0) {
-    return `WARNING: Filter removed all results!
-
-Your filter pattern didn't match any items. RESULTS is now empty.
-Go back to _1 (original search) and try:
-- Different filter pattern that matches the query
-- Or (map _1 (lambda x ...)) to extract values
-- Or report what you found in _1
-
-Example: (filter _1 (lambda x (match x "SALES_DATA" 0)))`;
+    return `Filter matched nothing. Try simpler pattern or use _1 directly.`;
   }
 
-  // If empty results, encourage trying different search terms
   if (resultCount === 0) {
-    return `RESULTS is empty. Try a DIFFERENT search:
-
-- Use keyword from the query: (grep "sales") or (grep "SALES_DATA")
-- Use simpler patterns
-- Check spelling
-
-DO NOT give up or search for unrelated terms.`;
+    return `Empty. Try different keyword.`;
   }
 
-  // Good results - guide next steps
   if (resultCount && resultCount > 0) {
-    return `Good. ${resultCount} items in RESULTS.
-
-Next step options:
-1. If RESULTS answers the query -> report with <<<FINAL>>> ... <<<END>>>
-2. If need to extract values -> (map RESULTS (lambda x (match x "pattern" 1)))
-3. If need to sum numbers -> (sum (map RESULTS ...))
-4. If too many irrelevant -> (filter RESULTS (lambda x (match x "keyword" 0)))
-
-Focus on the original query. Don't search for unrelated terms.`;
+    return `${resultCount} results. Next: filter, map, sum, or <<<FINAL>>>`;
   }
 
-  return `Result bound to RESULTS. Analyze and report your answer.`;
+  return `Done. Report with <<<FINAL>>>`;
 }
 
 /**
@@ -367,24 +291,10 @@ Focus on the original query. Don't search for unrelated terms.`;
  */
 function getRepeatedCodeFeedback(resultCount?: number): string {
   if (resultCount === 0) {
-    return `ERROR: Repeated term and RESULTS is empty.
-
-Try a DIFFERENT search pattern:
-- Use single keywords: (grep "payment") or (grep "error")
-- Use shorter patterns: "fail" instead of "failure message"
-- Try related terms: "timeout", "refused", "exception"
-
-DO NOT repeat the same search. Try something new.`;
+    return `Repeated. Try different keyword.`;
   }
 
-  return `ERROR: Repeated term. You already have RESULTS from the previous turn.
-
-If RESULTS contains what you need, REPORT YOUR ANSWER NOW:
-<<<FINAL>>>
-Based on my analysis, the answer is: [your answer based on RESULTS]
-<<<END>>>
-
-Only run more code if you need to further refine RESULTS.`;
+  return `Already done. Use RESULTS or report <<<FINAL>>>`;
 }
 
 /**

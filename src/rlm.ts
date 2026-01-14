@@ -930,8 +930,10 @@ Try again with proper formatting.`;
         history.push({ role: "user", content: feedback });
 
         // Check for final answer AFTER code execution (same response may have both)
-        // But only if there was no error and output was helpful
-        if (!result.error && !lastOutputWasUnhelpful) {
+        // But only if there was no error, output was helpful, and result is not an array
+        // (arrays indicate more processing is needed - don't accept premature answers)
+        const resultIsArray = Array.isArray(solverResult?.value);
+        if (!result.error && !lastOutputWasUnhelpful && !resultIsArray) {
           const finalAnswer = adapter.extractFinalAnswer(response);
           if (finalAnswer !== null) {
             log(`[Turn ${turn}] Final answer found after code execution`);
