@@ -4,9 +4,109 @@ Process documents 100x larger than your LLM's context window—without vector da
 
 ## The Problem
 
-LLMs have fixed context windows. Traditional solutions (RAG, chunking) lose information or miss connections across chunks. RLM takes a different approach: the model writes code to explore documents programmatically, deciding at runtime how to decompose and analyze the data.
+LLMs have fixed context windows. Traditional solutions (RAG, chunking) lose information or miss connections across chunks. RLM takes a different approach: the model reasons about your query and outputs symbolic commands that a logic engine executes against the document.
 
 Based on the [Recursive Language Models paper](https://arxiv.org/abs/2512.24601).
+
+## How It Works
+
+Unlike traditional approaches where an LLM writes arbitrary code, RLM uses a **constrained symbolic language** called Nucleus. The LLM outputs S-expressions (like Lisp), which are parsed, type-checked, and executed by a logic engine.
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   User Query    │────▶│   LLM Reasons   │────▶│  S-Expression   │
+│ "total sales?"  │     │  about intent   │     │  (sum RESULTS)  │
+└─────────────────┘     └─────────────────┘     └────────┬────────┘
+                                                         │
+┌─────────────────┐     ┌─────────────────┐     ┌────────▼────────┐
+│  Final Answer   │◀────│  Logic Engine   │◀────│   LC Parser     │
+│   13,000,000    │     │   Executes      │     │   Validates     │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+**Why this works better than code generation:**
+
+1. **Reduced entropy** - S-expressions have a rigid grammar with fewer valid outputs than JavaScript
+2. **Fail-fast validation** - Parser rejects malformed commands before execution
+3. **Safe execution** - The logic engine only executes known operations, no arbitrary code
+4. **Small model friendly** - 7B models handle symbolic grammars better than freeform code
+
+## Architecture
+
+### The Nucleus DSL
+
+The LLM outputs commands in the Nucleus DSL—an S-expression language designed for document analysis:
+
+```scheme
+; Search for patterns
+(grep "SALES_DATA")
+
+; Filter results
+(filter RESULTS (lambda x (match x "NORTH" 0)))
+
+; Aggregate
+(sum RESULTS)    ; Auto-extracts numbers like "$2,340,000" from lines
+(count RESULTS)  ; Count matching items
+
+; Final answer
+<<<FINAL>>>13000000<<<END>>>
+```
+
+### The Logic Engine
+
+The logic engine (`src/logic/`) processes Nucleus commands:
+
+1. **LC Parser** (`lc-parser.ts`) - Parses S-expressions into an AST
+2. **Type Inference** (`type-inference.ts`) - Validates types before execution
+3. **Constraint Resolver** (`constraint-resolver.ts`) - Handles symbolic constraints like `[Σ⚡μ]`
+4. **LC Solver** (`lc-solver.ts`) - Executes commands against the document
+
+The solver uses **miniKanren** (a relational programming engine) for pattern classification and filtering operations.
+
+### Pre-Search Optimization
+
+Before calling the LLM, the system extracts keywords from your query and pre-runs grep:
+
+```
+Query: "What is the total of all north sales data values?"
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────┐
+│ Pre-search extracts: "north", "sales", "data"       │
+│ Tries compound patterns: SALES.*NORTH, NORTH.*SALES │
+│ Pre-populates RESULTS before LLM is called          │
+└─────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────┐
+│ LLM receives: "RESULTS has 1 match"                 │
+│ LLM outputs: (sum RESULTS)  ← skips search step!   │
+└─────────────────────────────────────────────────────┘
+```
+
+This saves turns by pre-populating `RESULTS` so the model can immediately aggregate.
+
+### The Role of the LLM
+
+The LLM does **reasoning**, not code generation:
+
+1. **Understands intent** - Interprets "total of north sales" as needing grep + filter + sum
+2. **Chooses operations** - Decides which Nucleus commands achieve the goal
+3. **Verifies results** - Checks if the current results answer the query
+4. **Iterates** - Refines search if results are too broad or narrow
+
+The LLM never writes JavaScript. It outputs symbolic commands that the logic engine executes safely.
+
+### Components Summary
+
+| Component | Purpose |
+|-----------|---------|
+| **Nucleus Adapter** | Prompts LLM to output S-expressions |
+| **LC Parser** | Parses S-expressions to AST |
+| **LC Solver** | Executes commands against document |
+| **miniKanren** | Relational engine for classification |
+| **Pre-Search** | Extracts keywords and pre-runs grep |
+| **RAG Hints** | Few-shot examples from past successes |
 
 ## Installation
 
@@ -73,7 +173,7 @@ rlm --help
 
 ### MCP Integration
 
-RLM includes an MCP (Model Context Protocol) server that exposes the `analyze_document` tool. This allows coding agents like [Crush](https://github.com/charmbracelet/crush) to analyze documents that exceed its context window.
+RLM includes an MCP (Model Context Protocol) server that exposes the `analyze_document` tool. This allows coding agents to analyze documents that exceed their context window.
 
 #### MCP Tool: `analyze_document`
 
@@ -84,9 +184,7 @@ RLM includes an MCP (Model Context Protocol) server that exposes the `analyze_do
 | `maxTurns` | number | No | Maximum exploration turns (default: 10) |
 | `timeoutMs` | number | No | Timeout per turn in milliseconds (default: 30000) |
 
-#### Crush MCP example
-
-Add to your `crush.json` config:
+#### Example MCP config
 
 ```json
 {
@@ -98,16 +196,10 @@ Add to your `crush.json` config:
   }
 }
 ```
-Then ask Crush to analyze documents:
-
-> Use the analyze_document tool to find all sales figures in /path/to/report.txt and calculate the total
-
-See [Crush](https://github.com/charmbracelet/crush) for more details.
 
 #### Testing the MCP Server
 
 ```bash
-# Verify the server starts correctly
 rlm-mcp --test
 # Output: MCP server ready
 # Output: Available tools: analyze_document
@@ -132,307 +224,132 @@ const result = await runRLM("What are the main themes?", "./book.txt", {
 });
 ```
 
-> **Note**: The current Ollama implementation is tuned for `qwen2.5-coder:7b`. Other models may require prompt adjustments—see [Model-Specific Tuning](#model-specific-tuning) in Troubleshooting.
+## Example Session
 
-## Architecture
+```
+$ rlm "What is the total of all north sales data values?" ./report.txt --verbose
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant RLM as RLM Engine
-    participant Sandbox as JavaScript Sandbox
-    participant LLM as LLM Provider
+[Pre-search] Found 1 data matches for "SALES.*NORTH"
+[Pre-search] RESULTS pre-populated with 1 matches
 
-    User->>RLM: query + document path
-    RLM->>Sandbox: Create sandbox with document as `context`
+──────────────────────────────────────────────────
+[Turn 1/10] Querying LLM...
+[Turn 1] Term: (sum RESULTS)
+[Turn 1] Console output:
+  [Solver] Summing 1 values
+  [Solver] Sum = 2340000
+[Turn 1] Result: 2340000
 
-    loop Until FINAL or maxTurns
-        RLM->>LLM: System prompt + history
-        LLM-->>RLM: JavaScript code block
-        RLM->>Sandbox: Execute code (with timeout)
-        Sandbox-->>RLM: { result, logs, error }
-        Note over RLM: Append output to history
-    end
+──────────────────────────────────────────────────
+[Turn 2/10] Querying LLM...
+[Turn 2] Final answer received
 
-    RLM-->>User: Final answer
+2340000
 ```
 
-### Components
+The model:
+1. Received pre-populated RESULTS (pre-search found the data)
+2. Immediately summed the results (no grep needed)
+3. Output the final answer
 
-| Component | Purpose |
-|-----------|---------|
-| **RLM Engine** | Orchestrates the turn loop, builds prompts, extracts answers |
-| **Sandbox** | Isolated VM executing LLM-generated JavaScript with timeout protection |
-| **Tools** | `text_stats()`, `fuzzy_search()`, `llm_query()` available in sandbox |
-| **Memory** | Persistent array for accumulating findings across turns |
+## Nucleus DSL Reference
 
-### How It Works
+### Search Commands
 
-1. Document loads into sandbox as read-only `context` variable
-2. LLM receives system prompt with available tools and writes JavaScript
-3. Code executes in sandbox, results feed back to LLM
-4. LLM iterates until it outputs `<<<FINAL>>>answer<<<END>>>`
-5. Sub-queries via `llm_query()` enable recursive decomposition
+```scheme
+(grep "pattern")              ; Regex search, returns matches with line numbers
+(fuzzy_search "query" 10)     ; Fuzzy search, returns top N matches with scores
+(text_stats)                  ; Document metadata (length, line count, samples)
+```
 
-### Sandbox Tools
+### Collection Operations
 
-The LLM has access to these tools when exploring documents:
+```scheme
+(filter RESULTS (lambda x (match x "pattern" 0)))  ; Filter by regex
+(map RESULTS (lambda x (match x "(\\d+)" 1)))      ; Extract from each
+(sum RESULTS)                                       ; Sum numbers in results
+(count RESULTS)                                     ; Count items
+```
 
-| Tool | Description |
-|------|-------------|
-| `text_stats()` | Returns document metadata: length, line count, samples from start/middle/end |
-| `fuzzy_search(query, limit?)` | Finds approximate matches, returns lines with scores |
-| `llm_query(prompt)` | Spawns a sub-LLM call for complex analysis (limited by `maxSubCalls`) |
-| `context` | The full document text (read-only string) |
-| `memory` | Persistent array to accumulate findings across turns |
+### String Operations
 
-### Safety
+```scheme
+(match str "pattern" 0)       ; Regex match, return group N
+(replace str "from" "to")     ; String replacement
+(split str "," 0)             ; Split and get index
+(parseInt str)                ; Parse integer
+(parseFloat str)              ; Parse float
+```
 
-- Sandbox isolates code execution (no filesystem, network, or process access)
-- Configurable timeout per turn
-- `maxSubCalls` limit prevents infinite recursion
-- Sub-LLM calls receive only the prompt, never parent context
-- Auto-fixes common syntax errors in LLM-generated code
+### Cross-Turn State
+
+Results from previous turns are available:
+- `RESULTS` - Latest array result (updated by grep, filter)
+- `_0`, `_1`, `_2`, ... - Results from specific turns
+
+### Final Answer
+
+```scheme
+<<<FINAL>>>your answer here<<<END>>>
+```
 
 ## Troubleshooting
 
-### Model Answers Immediately Without Exploring
+### Model Answers Without Exploring
 
-**Symptom**: The model provides an answer on the first turn without running any code, often with hallucinated data.
-
-**Cause**: Smaller or less capable models may not follow the instruction to explore via code before answering.
+**Symptom**: The model provides an answer immediately with hallucinated data.
 
 **Solutions**:
+1. Use a more capable model (7B+ recommended)
+2. Be specific in your query: "Find lines containing SALES_DATA and sum the dollar amounts"
 
-1. **Use a more capable model** - Models like `deepseek-chat` or larger Ollama models follow instructions better
-2. **Make your query more specific** - Instead of vague queries, be explicit:
-   ```bash
-   # Vague (may cause hallucination)
-   rlm "What are the sales figures?" ./report.txt
+### Max Turns Reached
 
-   # Specific (guides exploration)
-   rlm "Search for SALES_DATA entries and sum the dollar amounts" ./report.txt
-   ```
-3. **Include data patterns in your query** - If you know how data is formatted, mention it:
-   ```bash
-   rlm "Find lines matching 'Total:' and extract the numbers" ./data.txt
-   ```
-
-### Max Turns Reached Without Answer
-
-**Symptom**: Output shows "Max turns (N) reached without final answer"
-
-**Cause**: The model keeps exploring but never terminates properly.
+**Symptom**: "Max turns (N) reached without final answer"
 
 **Solutions**:
-
 1. Increase `--max-turns` for complex documents
-2. Check if the model is stuck in a loop (`--verbose` shows repeated patterns)
-3. Simplify the query to require less exploration
+2. Check `--verbose` output for repeated patterns (model stuck in loop)
+3. Simplify the query
 
-### Sandbox Execution Errors
+### Parse Errors
 
-**Symptom**: Repeated "Error: Unexpected token" or similar JavaScript errors
+**Symptom**: "Parse error: no valid command"
 
-**Cause**: The model is generating invalid JavaScript code.
-
-**Solutions**:
-
-1. The system auto-fixes common issues (missing semicolons, TypeScript syntax)
-2. If errors persist, try a different model - some are better at generating valid code
-3. Use `--verbose` to see what code the model is generating
-
-### Model Adapters
-
-RLM uses an **adapter pattern** to handle model-specific prompting and response parsing. Each adapter encapsulates:
-
-- **System prompt** - How to instruct the model
-- **Code extraction** - How to parse code blocks from responses
-- **Answer detection** - How to recognize when the model has finished
-- **Feedback messages** - How to guide the model when it makes mistakes
-
-#### Available Adapters
-
-| Adapter | Models | Description |
-|---------|--------|-------------|
-| `qwen` | qwen*, codeqwen* | Tuned for Qwen models with emphasis on code-only responses |
-| `deepseek` | deepseek* | Structured prompts for DeepSeek's instruction-following style |
-| `base` | (fallback) | Generic adapter that works with most models |
-
-#### Auto-Detection
-
-Adapters are automatically selected based on the model name:
-
-```bash
-# Auto-detects "qwen" adapter from model name
-rlm "query" ./file.txt --model qwen2.5-coder:7b
-
-# Auto-detects "deepseek" adapter
-rlm "query" ./file.txt --model deepseek-chat
-```
-
-#### Explicit Selection
-
-Override auto-detection via CLI or config:
-
-```bash
-# CLI override
-rlm "query" ./file.txt --adapter qwen
-```
-
-```json
-// config.json - per-provider adapter
-{
-  "providers": {
-    "ollama": {
-      "model": "qwen2.5-coder:7b",
-      "adapter": "qwen"
-    }
-  }
-}
-```
-
-#### Creating Custom Adapters
-
-To add support for a new model family:
-
-1. Create `src/adapters/mymodel.ts`:
-
-```typescript
-import type { ModelAdapter } from "./types.js";
-import { baseExtractCode, baseExtractFinalAnswer } from "./base.js";
-
-export function createMyModelAdapter(): ModelAdapter {
-  return {
-    name: "mymodel",
-
-    buildSystemPrompt(contextLength, toolInterfaces) {
-      return `Your custom system prompt here...`;
-    },
-
-    extractCode(response) {
-      // Custom code extraction or use baseExtractCode(response)
-      return baseExtractCode(response);
-    },
-
-    extractFinalAnswer(response) {
-      // Custom answer detection or use baseExtractFinalAnswer(response)
-      return baseExtractFinalAnswer(response);
-    },
-
-    getNoCodeFeedback() {
-      return "Feedback when model doesn't provide code...";
-    },
-
-    getErrorFeedback(error) {
-      return `Feedback when code fails: ${error}`;
-    },
-  };
-}
-```
-
-2. Register in `src/adapters/index.ts`:
-
-```typescript
-import { createMyModelAdapter } from "./mymodel.js";
-
-// Add to registry
-const adapterFactories = {
-  // ... existing adapters
-  mymodel: createMyModelAdapter,
-};
-
-// Add auto-detection pattern
-const modelPatterns = [
-  // ... existing patterns
-  { pattern: /^mymodel/i, adapter: "mymodel" },
-];
-```
-
-#### Why Adapters Matter
-
-Different LLMs have varying behaviors:
-
-- **Instruction following**: Smaller models may ignore complex instructions
-- **Code generation**: Some models output Python instead of JavaScript
-- **Termination patterns**: Models differ in how they signal completion
-- **Error recovery**: Some models self-correct, others repeat mistakes
-
-The adapter system handles these differences transparently, allowing the same query to work across different model families.
-
-### Query Complexity and Model Capabilities
-
-**Symptom**: The model finds the right data but produces incorrect results, or returns 0/empty when values clearly exist.
-
-**Cause**: Smaller models (7B) can struggle to write correct parsing logic, especially for complex data formats. The model may write regex patterns that don't match the actual data format, or use flawed extraction logic.
-
-**What Works Well** (with 7B models):
-
-| Query Type | Example | Why It Works |
-|------------|---------|--------------|
-| Counting | "Count how many ERROR entries exist" | Simple `.length` on search results |
-| Listing | "List all unique log levels" | Direct iteration, no parsing |
-| Searching | "Find all lines containing 'timeout'" | Uses built-in `grep()` directly |
-| Existence | "Does this document mention 'authentication'?" | Boolean check on results |
-
-**What Struggles** (with 7B models):
-
-| Query Type | Example | Why It Fails |
-|------------|---------|--------------|
-| Currency parsing | "Sum all dollar amounts like $1,234,567" | Model writes regex expecting decimals (`.00`) when data has none |
-| Complex extraction | "Extract the reason field from each error" | Model parses wrong part of the string |
-| Multi-step aggregation | "Group errors by type and count each" | Logic errors in categorization code |
-| Format-sensitive parsing | "Parse the JSON in each log line" | Model assumes wrong data format |
+**Cause**: Model output malformed S-expression.
 
 **Solutions**:
-
-1. **Use simpler queries** - Break complex tasks into simpler steps:
-   ```bash
-   # Instead of: "Sum all sales figures"
-   # Use: "List all lines containing SALES_DATA"
-   # Then process the output yourself
-   ```
-
-2. **Be explicit about formats** - Tell the model exactly what to expect:
-   ```bash
-   # Bad: "Extract the numbers"
-   # Good: "Extract numbers formatted as X,XXX,XXX (no decimals, with commas)"
-   ```
-
-3. **Use a larger model** - 30B+ models write significantly better parsing code
-
-4. **Leverage the raw output** - Even when parsing fails, the system often returns the raw matched data which you can process externally
-
-**Example of Model Limitation**:
-
-```bash
-# Query: "Sum all SALES_DATA values"
-# Data format: SALES_DATA_NORTH: $2,340,000
-
-# Model writes: /\$\d{1,3}(,\d{3})*\.\d{2}/  (expects $1,234.56)
-# Actual format: $2,340,000 (no decimals)
-# Result: 0 (regex doesn't match)
-```
-
-The infrastructure correctly finds all SALES_DATA lines, but the model's regex assumes a different number format. This is a model capability issue, not an infrastructure bug.
+1. The system auto-converts JSON to S-expressions as fallback
+2. Use `--verbose` to see what the model is generating
+3. Try a different model tuned for code/symbolic output
 
 ## Development
 
 ```bash
-# Run tests
-npm test
+npm test                              # Run tests
+npm test -- --coverage                # With coverage
+RUN_E2E=1 npm test -- tests/e2e.test.ts  # E2E tests (requires Ollama)
+npm run build                         # Build
+npm run typecheck                     # Type check
+```
 
-# Run with coverage
-npm test -- --coverage
+## Project Structure
 
-# E2E tests (requires Ollama running locally)
-RUN_E2E=1 npm test -- --run tests/e2e.test.ts
-
-# Build
-npm run build
-
-# Type check
-npm run typecheck
+```
+src/
+├── adapters/           # Model-specific prompting
+│   ├── nucleus.ts      # S-expression DSL adapter
+│   └── types.ts        # Adapter interface
+├── logic/              # Logic engine
+│   ├── lc-parser.ts    # S-expression parser
+│   ├── lc-solver.ts    # Command executor (uses miniKanren)
+│   ├── type-inference.ts
+│   └── constraint-resolver.ts
+├── minikanren/         # Relational programming engine
+├── synthesis/          # Program synthesis (Barliman-style)
+│   └── evalo/          # Extractor DSL
+├── rag/                # Few-shot hint retrieval
+└── rlm.ts              # Main execution loop
 ```
 
 ## Acknowledgements
@@ -440,7 +357,7 @@ npm run typecheck
 This project incorporates ideas and code from:
 
 - **[ramo](https://github.com/wjlewis/ramo)** - A miniKanren implementation in TypeScript by Will Lewis. Used for constraint-based program synthesis.
-- **[Barliman](https://github.com/webyrd/Barliman)** - A prototype smart editor by William Byrd that uses program synthesis to assist programmers. The Barliman-style approach of providing input/output constraints instead of code inspired the synthesis workflow in this project.
+- **[Barliman](https://github.com/webyrd/Barliman)** - A prototype smart editor by William Byrd that uses program synthesis to assist programmers. The Barliman-style approach of providing input/output constraints instead of code inspired the synthesis workflow.
 
 ## License
 
@@ -451,3 +368,4 @@ MIT
 - [RLM Paper](https://arxiv.org/abs/2512.24601)
 - [Original Implementation](https://github.com/alexzhang13/rlm)
 - [Model Context Protocol](https://modelcontextprotocol.io/)
+- [miniKanren](http://minikanren.org/)
