@@ -24,19 +24,19 @@ function buildSystemPrompt(
   // Determine document size category
   const sizeCategory = contextLength < 2000 ? "SMALL" : "LARGE";
 
-  return `You analyze documents. Output ONE thing per turn.
+  return `You analyze documents. Output ONE command per turn.
 
-For ${sizeCategory} documents (${contextLength} chars):
-${sizeCategory === "SMALL" ? "- Can answer directly: <<<FINAL>>>answer<<<END>>>" : "- Must search first: (grep \"keyword\")"}
+COMMANDS (replace ___ with your values):
+(grep "___")      - search for keyword from query
+(filter RESULTS (lambda x (match x "___" 0))) - keep matching lines
+(map RESULTS (lambda x (match x "[0-9]+" 0))) - extract numbers
+(sum RESULTS)     - add all numbers in RESULTS
+(count RESULTS)   - count items in RESULTS
 
-COMMANDS:
-(grep "word")     - search document
-(filter RESULTS (lambda x (match x "pattern" 0))) - keep matches
-(map RESULTS (lambda x (match x "[0-9]+" 0)))     - extract numbers
-(sum RESULTS)     - add numbers
-(count RESULTS)   - count items
-
-Final: <<<FINAL>>>answer<<<END>>>
+After grep succeeds, use RESULTS directly:
+- To count: (count RESULTS)
+- To sum: (sum RESULTS)
+- To answer: <<<FINAL>>>your answer<<<END>>>
 
 ${hints?.hintsText || ""}${hints?.selfCorrectionText || ""}`;
 }
@@ -249,10 +249,11 @@ function extractFinalAnswer(
  * Feedback when no LC term found
  */
 function getNoCodeFeedback(): string {
-  return `Parse error. Output one of:
-(grep "keyword")
-(sum RESULTS)
-<<<FINAL>>>answer<<<END>>>
+  return `Parse error: no valid command found. Use one of:
+(grep "___")       <- put keyword from query
+(count RESULTS)    <- if you already searched
+(sum RESULTS)      <- to add numbers
+<<<FINAL>>>___<<<END>>>  <- final answer
 
 Next:`;
 }
@@ -279,24 +280,29 @@ function getErrorFeedback(error: string, code?: string): string {
  */
 function getSuccessFeedback(resultCount?: number, previousCount?: number): string {
   if (resultCount === 0 && previousCount && previousCount > 0) {
-    return `Filter matched nothing. Use _1 (original results) with simpler pattern.
+    return `Filter matched nothing. Use _1 with simpler pattern.
 
 Next:`;
   }
 
   if (resultCount === 0) {
-    return `No matches. Try different keyword.
+    return `No matches. Try different keyword from the query.
 
 Next:`;
   }
 
   if (resultCount && resultCount > 0) {
-    return `${resultCount} results in RESULTS.
+    return `Found ${resultCount} matches in RESULTS.
+
+To count them: (count RESULTS)
+To sum numbers: (sum RESULTS)
+To answer: <<<FINAL>>>___<<<END>>>
 
 Next:`;
   }
 
-  return `Done.
+  return `Done. Output your answer:
+<<<FINAL>>>___<<<END>>>
 
 Next:`;
 }
