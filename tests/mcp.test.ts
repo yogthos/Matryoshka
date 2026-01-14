@@ -60,11 +60,11 @@ describe("MCP Server", () => {
     it("should execute analyze_document with mock LLM", async () => {
       const { createMCPServer } = await import("../src/mcp-server.js");
 
-      // Create a mock LLM that first runs code, then returns final answer
-      // (code execution is required before final answer is accepted)
+      // Create a mock LLM that first runs LC code, then returns final answer
+      // (LC execution is required before final answer is accepted)
       const mockLLMClient = vi
         .fn()
-        .mockResolvedValueOnce("```javascript\nconsole.log('exploring');\n```")
+        .mockResolvedValueOnce('(grep "test")')
         .mockResolvedValueOnce("<<<FINAL>>>\nTest result\n<<<END>>>");
 
       const server = createMCPServer({ llmClient: mockLLMClient });

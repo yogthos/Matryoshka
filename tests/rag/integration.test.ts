@@ -158,17 +158,17 @@ describe("RAG + Adapter Integration", () => {
     it("should return extraction hints for parse queries", () => {
       const hints = manager.getHints("extract the price values", 3);
       const hasExtraction = hints.some(h =>
-        h.content.includes("match") || h.content.includes("extract")
+        h.content.includes("match") || h.content.includes("extract") || h.content.includes("map")
       );
       expect(hasExtraction).toBe(true);
     });
 
-    it("should return table hints for CSV queries", () => {
-      const hints = manager.getHints("parse the CSV data and get columns", 3);
-      const hasTable = hints.some(h =>
-        h.content.includes("split") || h.content.includes("column")
+    it("should return classification hints for filter queries", () => {
+      const hints = manager.getHints("find all failed items", 3);
+      const hasClassification = hints.some(h =>
+        h.content.includes("classify") || h.content.includes("filter") || h.content.includes("classifier")
       );
-      expect(hasTable).toBe(true);
+      expect(hasClassification).toBe(true);
     });
   });
 });

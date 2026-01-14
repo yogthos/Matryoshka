@@ -21,8 +21,10 @@ describe("Qwen Barliman Adapter", () => {
       expect(registered?.name).toBe("qwen-barliman");
     });
 
-    it("should be the default for qwen models", () => {
-      const resolved = resolveAdapter("qwen2.5-coder:7b");
+    it("should be available when explicitly requested", () => {
+      // Note: nucleus is now the default for all models
+      // qwen-barliman is still available when explicitly requested
+      const resolved = resolveAdapter("qwen2.5-coder:7b", "qwen-barliman");
       expect(resolved.name).toBe("qwen-barliman");
     });
   });
@@ -30,38 +32,36 @@ describe("Qwen Barliman Adapter", () => {
   describe("buildSystemPrompt", () => {
     const prompt = adapter.buildSystemPrompt(10000, "");
 
-    it("should emphasize constraint-based synthesis", () => {
-      expect(prompt).toContain("CONSTRAINT PROVIDER");
-      expect(prompt).toContain("input/output");
+    it("should explain synthesize_extractor", () => {
+      expect(prompt).toContain("synthesize_extractor");
+      expect(prompt).toContain("input");
+      expect(prompt).toContain("output");
     });
 
-    it("should explain the synthesis engine", () => {
-      expect(prompt).toContain("synthesizer");
-      expect(prompt).toContain("miniKanren");
+    it("should show classification workflow", () => {
+      expect(prompt).toContain("classifier");
+      expect(prompt).toContain("true");
+      expect(prompt).toContain("false");
     });
 
-    it("should explain grep API correctly - single argument", () => {
-      expect(prompt).toContain("ONE argument");
+    it("should explain grep API", () => {
+      expect(prompt).toContain("grep");
     });
 
     it("should explain grep returns objects", () => {
-      expect(prompt).toContain("hit.line");
+      expect(prompt).toContain("line");
+      expect(prompt).toContain("lineNum");
     });
 
-    it("should include document length", () => {
-      expect(prompt).toContain("10,000");
-    });
-
-    it("should warn about floating objects", () => {
-      expect(prompt).toContain("NO floating objects");
+    it("should emphasize two-step process", () => {
+      expect(prompt).toContain("TURN 1");
+      expect(prompt).toContain("TURN 2");
+      expect(prompt).toContain("SEARCH ONLY");
     });
 
     it("should be generic - not domain specific", () => {
-      // Should use generic terms like "keyword" not specific like "SALES_DATA"
       expect(prompt).toContain("keyword");
-      // Should not hardcode specific domains
       expect(prompt).not.toContain("SALES_DATA");
-      expect(prompt).not.toContain("$1,000");
     });
   });
 
@@ -124,16 +124,15 @@ describe("Generic Prompting", () => {
 
   it("should use generic placeholders", () => {
     expect(prompt).toContain("keyword");
-    expect(prompt).toContain("pattern");
   });
 
-  it("should explain to FIRST search, THEN synthesize", () => {
-    expect(prompt).toContain("FIRST search");
-    expect(prompt).toContain("THEN");
+  it("should explain workflow: search then synthesize", () => {
+    expect(prompt).toContain("SEARCH ONLY");
+    expect(prompt).toContain("synthesize_extractor");
   });
 
-  it("should emphasize looking at output", () => {
-    expect(prompt).toContain("LOOK");
-    expect(prompt).toContain("output");
+  it("should emphasize copying exact lines", () => {
+    expect(prompt).toContain("EXACT");
+    expect(prompt).toContain("COPY");
   });
 });

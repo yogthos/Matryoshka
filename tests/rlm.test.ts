@@ -161,10 +161,11 @@ describe("RLM Executor", () => {
   });
 
   describe("runRLM", () => {
+    // NOTE: All tests now use LC syntax since RLM only accepts Lambda Calculus terms
     it("should load document and process final answer", async () => {
-      // First turn: execute code (required before final answer is accepted)
+      // First turn: execute LC search (required before final answer is accepted)
       mockLLM
-        .mockResolvedValueOnce("```javascript\nconsole.log('exploring');\n```")
+        .mockResolvedValueOnce('(grep "test")')
         .mockResolvedValueOnce("<<<FINAL>>>\ndone\n<<<END>>>");
 
       const result = await runRLM("test query", "./test-fixtures/small.txt", {
@@ -177,9 +178,7 @@ describe("RLM Executor", () => {
 
     it("should execute code and feed results back", async () => {
       mockLLM
-        .mockResolvedValueOnce(
-          "```typescript\nconsole.log(context.length);\n```"
-        )
+        .mockResolvedValueOnce('(grep "content")')
         .mockResolvedValueOnce("<<<FINAL>>>\nprocessed\n<<<END>>>");
 
       const result = await runRLM("test query", "./test-fixtures/small.txt", {
@@ -193,9 +192,7 @@ describe("RLM Executor", () => {
 
     it("should include sandbox output in history", async () => {
       mockLLM
-        .mockResolvedValueOnce(
-          "```typescript\nconsole.log(context.length);\n```"
-        )
+        .mockResolvedValueOnce('(grep "data")')
         .mockResolvedValueOnce("<<<FINAL>>>\nprocessed\n<<<END>>>");
 
       await runRLM("test query", "./test-fixtures/small.txt", {
@@ -203,13 +200,13 @@ describe("RLM Executor", () => {
         maxTurns: 5,
       });
 
-      // Second call should include sandbox output
+      // Second call should include execution output (Turn 1 Output)
       const secondCall = mockLLM.mock.calls[1][0];
-      expect(secondCall).toContain("Sandbox");
+      expect(secondCall).toContain("Turn 1");
     });
 
     it("should stop at maxTurns", async () => {
-      mockLLM.mockResolvedValue('```typescript\nconsole.log("loop");\n```');
+      mockLLM.mockResolvedValue('(grep "loop")');
 
       const result = await runRLM("test query", "./test-fixtures/small.txt", {
         llmClient: mockLLM,
@@ -222,14 +219,10 @@ describe("RLM Executor", () => {
 
     it("should handle sandbox errors gracefully", async () => {
       mockLLM
-        // Turn 1: Error
-        .mockResolvedValueOnce(
-          '```typescript\nthrow new Error("test error");\n```'
-        )
-        // Turn 2: Successful code (clears error state)
-        .mockResolvedValueOnce(
-          "```javascript\nconsole.log('fixed');\n```"
-        )
+        // Turn 1: Invalid LC (parse error)
+        .mockResolvedValueOnce("(grep")
+        // Turn 2: Valid LC search
+        .mockResolvedValueOnce('(grep "fixed")')
         // Turn 3: Final answer (accepted after successful code)
         .mockResolvedValueOnce("<<<FINAL>>>\nrecovered\n<<<END>>>");
 
@@ -241,14 +234,13 @@ describe("RLM Executor", () => {
       expect(result).toBe("recovered");
     });
 
+    // NOTE: Now uses LC syntax since RLM requires LC terms
     it("should feed errors back for self-correction", async () => {
       mockLLM
-        // Turn 1: Syntax error
-        .mockResolvedValueOnce("```typescript\nconst x = {\n```")
+        // Turn 1: Invalid LC syntax (unbalanced parens)
+        .mockResolvedValueOnce("(grep")
         // Turn 2: Model sees error and fixes
-        .mockResolvedValueOnce(
-          "```typescript\nconst x = { valid: true };\nconsole.log(x);\n```"
-        )
+        .mockResolvedValueOnce('(grep "test")')
         // Turn 3: Success
         .mockResolvedValueOnce("<<<FINAL>>>\nFixed and completed\n<<<END>>>");
 
@@ -257,17 +249,18 @@ describe("RLM Executor", () => {
         maxTurns: 5,
       });
 
-      // Second call should include the syntax error message
+      // Second call should include parse error message
       const secondCall = mockLLM.mock.calls[1][0];
-      expect(secondCall).toMatch(/error|syntax|unexpected/i);
+      expect(secondCall).toMatch(/error|parse|syntax/i);
 
       // Model should recover
       expect(result).toBe("Fixed and completed");
     });
 
+    // NOTE: Now uses LC syntax - tests LC parse error context
     it("should include helpful error context for model recovery", async () => {
       mockLLM
-        .mockResolvedValueOnce("```typescript\nundefinedVariable.foo()\n```")
+        .mockResolvedValueOnce('(grep "test" "extra_arg")')  // Invalid: grep takes one arg
         .mockResolvedValueOnce("<<<FINAL>>>\nrecovered\n<<<END>>>");
 
       await runRLM("test query", "./test-fixtures/small.txt", {
@@ -277,10 +270,12 @@ describe("RLM Executor", () => {
 
       const secondCall = mockLLM.mock.calls[1][0];
       // Error message should help model understand what went wrong
-      expect(secondCall).toContain("undefinedVariable");
+      expect(secondCall).toMatch(/error|parse|syntax|argument/i);
     });
 
-    it("should respect turnTimeoutMs", async () => {
+    // SKIP: Infinite loop timeout test requires JavaScript execution
+    // LC execution doesn't support arbitrary code loops
+    it.skip("should respect turnTimeoutMs", async () => {
       mockLLM.mockResolvedValueOnce("```typescript\nwhile(true){}\n```");
 
       const start = Date.now();
@@ -294,7 +289,9 @@ describe("RLM Executor", () => {
       expect(elapsed).toBeLessThan(1000);
     });
 
-    it("should resolve FINAL_VAR from sandbox", async () => {
+    // SKIP: Memory manipulation is not supported in LC-only execution
+    // The LC system uses grep/classify, not direct memory access
+    it.skip("should resolve FINAL_VAR from sandbox", async () => {
       mockLLM
         .mockResolvedValueOnce(
           '```typescript\nmemory.push({key: "value"});\n```'
@@ -309,12 +306,11 @@ describe("RLM Executor", () => {
       expect(result).toEqual([{ key: "value" }]);
     });
 
+    // NOTE: Now uses LC syntax
     it("should accumulate history across turns", async () => {
       mockLLM
-        .mockResolvedValueOnce(
-          "```typescript\nconst stats = text_stats();\nconsole.log(stats.lineCount);\n```"
-        )
-        .mockResolvedValueOnce('```typescript\nmemory.push("found");\n```')
+        .mockResolvedValueOnce('(grep "test")')
+        .mockResolvedValueOnce('(grep "another")')
         .mockResolvedValueOnce("<<<FINAL>>>\ndone\n<<<END>>>");
 
       await runRLM("test query", "./test-fixtures/small.txt", {
@@ -327,7 +323,9 @@ describe("RLM Executor", () => {
       expect(thirdCall).toContain("Turn"); // Should reference earlier turns
     });
 
-    it("should enforce maxSubCalls per turn", async () => {
+    // SKIP: maxSubCalls test doesn't apply to LC execution
+    // LC terms don't make sub-LLM calls - they get compiled to JS
+    it.skip("should enforce maxSubCalls per turn", async () => {
       // Create a separate mock for sub-LLM calls
       let subCallCount = 0;
       const trackingLLM = vi.fn().mockImplementation((prompt: string) => {

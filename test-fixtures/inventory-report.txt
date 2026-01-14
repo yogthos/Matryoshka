@@ -1,0 +1,129 @@
+# Warehouse Inventory Report
+# Distribution Center: DC-WEST-003
+# Report Date: November 2024
+# Prepared by: Inventory Management System v3.2
+
+## Overview
+
+This report contains current inventory levels, pricing, and stock status for all product categories. Regular audits ensure data accuracy.
+
+The distribution center serves retail locations across the western region. Priority shipping is available for low-stock items.
+
+---
+
+## Category: Electronics
+
+Consumer electronics remain our highest-value category with strong Q4 demand.
+
+### Smartphones
+
+SKU: ELEC-PHONE-001 | iPhone 15 Pro 128GB | PRICE: $999.00 | QTY: 145 | STATUS: IN_STOCK
+SKU: ELEC-PHONE-002 | iPhone 15 Pro 256GB | PRICE: $1,099.00 | QTY: 89 | STATUS: IN_STOCK
+SKU: ELEC-PHONE-003 | Samsung Galaxy S24 | PRICE: $849.00 | QTY: 203 | STATUS: IN_STOCK
+SKU: ELEC-PHONE-004 | Google Pixel 8 | PRICE: $699.00 | QTY: 67 | STATUS: IN_STOCK
+SKU: ELEC-PHONE-005 | OnePlus 12 | PRICE: $799.00 | QTY: 12 | STATUS: LOW_STOCK
+
+Smartphone accessories are stored in adjacent warehouse section B.
+
+### Laptops
+
+SKU: ELEC-LAPTOP-001 | MacBook Air M3 | PRICE: $1,099.00 | QTY: 78 | STATUS: IN_STOCK
+SKU: ELEC-LAPTOP-002 | MacBook Pro 14" | PRICE: $1,999.00 | QTY: 34 | STATUS: IN_STOCK
+SKU: ELEC-LAPTOP-003 | Dell XPS 15 | PRICE: $1,449.00 | QTY: 56 | STATUS: IN_STOCK
+SKU: ELEC-LAPTOP-004 | ThinkPad X1 Carbon | PRICE: $1,649.00 | QTY: 23 | STATUS: IN_STOCK
+SKU: ELEC-LAPTOP-005 | HP Spectre x360 | PRICE: $1,299.00 | QTY: 8 | STATUS: LOW_STOCK
+
+Corporate laptop orders should be processed through the B2B portal.
+
+### Tablets
+
+SKU: ELEC-TABLET-001 | iPad Pro 11" | PRICE: $799.00 | QTY: 112 | STATUS: IN_STOCK
+SKU: ELEC-TABLET-002 | iPad Air | PRICE: $599.00 | QTY: 189 | STATUS: IN_STOCK
+SKU: ELEC-TABLET-003 | Samsung Tab S9 | PRICE: $849.00 | QTY: 45 | STATUS: IN_STOCK
+SKU: ELEC-TABLET-004 | Microsoft Surface Pro | PRICE: $999.00 | QTY: 0 | STATUS: OUT_OF_STOCK
+
+Surface Pro restock expected December 5th.
+
+---
+
+## Category: Home Appliances
+
+Home appliance sales typically increase during holiday promotions.
+
+### Kitchen Appliances
+
+SKU: HOME-KITCHEN-001 | KitchenAid Stand Mixer | PRICE: $449.00 | QTY: 67 | STATUS: IN_STOCK
+SKU: HOME-KITCHEN-002 | Ninja Blender Pro | PRICE: $179.00 | QTY: 234 | STATUS: IN_STOCK
+SKU: HOME-KITCHEN-003 | Instant Pot Duo | PRICE: $89.00 | QTY: 312 | STATUS: IN_STOCK
+SKU: HOME-KITCHEN-004 | Breville Espresso | PRICE: $749.00 | QTY: 28 | STATUS: IN_STOCK
+SKU: HOME-KITCHEN-005 | Vitamix E310 | PRICE: $349.00 | QTY: 45 | STATUS: IN_STOCK
+
+Extended warranties available for appliances over $300.
+
+### Cleaning Appliances
+
+SKU: HOME-CLEAN-001 | Dyson V15 Detect | PRICE: $749.00 | QTY: 89 | STATUS: IN_STOCK
+SKU: HOME-CLEAN-002 | Roomba j7+ | PRICE: $599.00 | QTY: 156 | STATUS: IN_STOCK
+SKU: HOME-CLEAN-003 | Shark Navigator | PRICE: $199.00 | QTY: 278 | STATUS: IN_STOCK
+SKU: HOME-CLEAN-004 | Bissell CrossWave | PRICE: $329.00 | QTY: 5 | STATUS: LOW_STOCK
+
+---
+
+## Category: Sporting Goods
+
+Fitness equipment demand remains elevated post-pandemic.
+
+### Fitness Equipment
+
+SKU: SPORT-FIT-001 | Peloton Bike+ | PRICE: $2,495.00 | QTY: 15 | STATUS: IN_STOCK
+SKU: SPORT-FIT-002 | NordicTrack Treadmill | PRICE: $1,799.00 | QTY: 22 | STATUS: IN_STOCK
+SKU: SPORT-FIT-003 | Bowflex Dumbbells | PRICE: $549.00 | QTY: 134 | STATUS: IN_STOCK
+SKU: SPORT-FIT-004 | Concept2 Rower | PRICE: $990.00 | QTY: 18 | STATUS: IN_STOCK
+SKU: SPORT-FIT-005 | Mirror Home Gym | PRICE: $1,495.00 | QTY: 0 | STATUS: DISCONTINUED
+
+Mirror units have been discontinued. Direct customers to Lululemon Studio.
+
+### Outdoor Recreation
+
+SKU: SPORT-OUT-001 | Yeti Cooler 65 | PRICE: $375.00 | QTY: 89 | STATUS: IN_STOCK
+SKU: SPORT-OUT-002 | REI Camp Tent 4P | PRICE: $449.00 | QTY: 34 | STATUS: IN_STOCK
+SKU: SPORT-OUT-003 | Osprey Backpack 50L | PRICE: $230.00 | QTY: 167 | STATUS: IN_STOCK
+SKU: SPORT-OUT-004 | Coleman Sleeping Bag | PRICE: $79.00 | QTY: 445 | STATUS: IN_STOCK
+
+---
+
+## Category: Office Supplies
+
+Bulk ordering discounts available for orders over $500.
+
+SKU: OFFICE-001 | Herman Miller Aeron | PRICE: $1,395.00 | QTY: 12 | STATUS: IN_STOCK
+SKU: OFFICE-002 | Standing Desk 60" | PRICE: $599.00 | QTY: 45 | STATUS: IN_STOCK
+SKU: OFFICE-003 | Monitor Arm Dual | PRICE: $179.00 | QTY: 234 | STATUS: IN_STOCK
+SKU: OFFICE-004 | Desk Organizer Set | PRICE: $45.00 | QTY: 567 | STATUS: IN_STOCK
+SKU: OFFICE-005 | Ergonomic Keyboard | PRICE: $149.00 | QTY: 189 | STATUS: IN_STOCK
+
+---
+
+## Inventory Summary
+
+Total SKUs in system: 38
+In Stock: 33
+Low Stock: 3
+Out of Stock: 1
+Discontinued: 1
+
+## Reorder Alerts
+
+The following items require immediate reorder:
+- ELEC-PHONE-005: OnePlus 12 (12 units remaining)
+- ELEC-LAPTOP-005: HP Spectre x360 (8 units remaining)
+- HOME-CLEAN-004: Bissell CrossWave (5 units remaining)
+
+## Notes
+
+- All prices are in USD and include standard markup
+- Quantities updated as of report generation time
+- For real-time inventory, use the WMS dashboard
+- Holiday season allocation limits may apply
+
+END OF REPORT

@@ -11,13 +11,125 @@ import { createSandboxWithSynthesis, type SandboxWithSynthesis } from "./synthes
 import { SynthesisCoordinator } from "./synthesis/coordinator.js";
 import { collectExamplesFromResult, extractGrepResults } from "./synthesis/example-collector.js";
 import { createToolRegistry, getToolInterfaces } from "./tools.js";
-import { tryFixCode } from "./code-fixer.js";
 import type { LLMQueryFn } from "./llm/types.js";
 import type { ModelAdapter, FinalVarMarker, RAGHints } from "./adapters/types.js";
-import { createBaseAdapter } from "./adapters/base.js";
+import { createNucleusAdapter } from "./adapters/nucleus.js";
 import type { SynthesisConstraint } from "./constraints/types.js";
 import { verifyResult } from "./constraints/verifier.js";
 import { getRAGManager, type RAGManager } from "./rag/manager.js";
+import { analyzeExecution, getEncouragement } from "./feedback/execution-feedback.js";
+import { parse as parseLC } from "./logic/lc-parser.js";
+import { isClassifyTerm, validateClassifyExamples } from "./logic/lc-compiler.js";
+import { inferType, typeToString } from "./logic/type-inference.js";
+import { solve as solveTerm, type SolverTools, type Bindings } from "./logic/lc-solver.js";
+
+/**
+ * Create SolverTools from document content
+ * These are the same tools the sandbox provides, but standalone for the solver
+ */
+function createSolverTools(context: string): SolverTools {
+  const lines = context.split("\n");
+
+  // Pre-compute text stats
+  const textStats = {
+    length: context.length,
+    lineCount: lines.length,
+    sample: {
+      start: lines.slice(0, 5).join("\n"),
+      middle: lines
+        .slice(
+          Math.floor(lines.length / 2) - 2,
+          Math.floor(lines.length / 2) + 3
+        )
+        .join("\n"),
+      end: lines.slice(-5).join("\n"),
+    },
+  };
+
+  // Fuzzy search implementation
+  // Adapted from FUZZY_SEARCH_IMPL for direct use
+  function fuzzyMatch(str: string, query: string): number {
+    const strLower = str.toLowerCase();
+    const queryLower = query.toLowerCase();
+
+    // Exact match bonus
+    if (strLower.includes(queryLower)) {
+      return 100 + queryLower.length;
+    }
+
+    // Fuzzy match
+    let score = 0;
+    let queryIndex = 0;
+    let prevMatchIndex = -1;
+
+    for (let i = 0; i < strLower.length && queryIndex < queryLower.length; i++) {
+      if (strLower[i] === queryLower[queryIndex]) {
+        score += 10;
+        // Bonus for consecutive matches
+        if (prevMatchIndex === i - 1) {
+          score += 5;
+        }
+        prevMatchIndex = i;
+        queryIndex++;
+      }
+    }
+
+    // Return 0 if didn't match all query chars
+    return queryIndex === queryLower.length ? score : 0;
+  }
+
+  return {
+    context,
+
+    grep: (pattern: string) => {
+      const flags = "gmi";
+      const regex = new RegExp(pattern, flags);
+      const results: Array<{ match: string; line: string; lineNum: number; index: number; groups: string[] }> = [];
+      let match;
+
+      while ((match = regex.exec(context)) !== null) {
+        const beforeMatch = context.slice(0, match.index);
+        const lineNum = (beforeMatch.match(/\n/g) || []).length + 1;
+        const line = lines[lineNum - 1] || "";
+
+        results.push({
+          match: match[0],
+          line: line,
+          lineNum: lineNum,
+          index: match.index,
+          groups: match.slice(1),
+        });
+
+        if (match[0].length === 0) {
+          regex.lastIndex++;
+        }
+      }
+
+      return results;
+    },
+
+    fuzzy_search: (query: string, limit: number = 10) => {
+      const results: Array<{ line: string; lineNum: number; score: number }> = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const score = fuzzyMatch(lines[i], query);
+        if (score > 0) {
+          results.push({
+            line: lines[i],
+            lineNum: i + 1,
+            score,
+          });
+        }
+      }
+
+      // Sort by score descending, take top limit
+      results.sort((a, b) => b.score - a.score);
+      return results.slice(0, limit);
+    },
+
+    text_stats: () => ({ ...textStats }),
+  };
+}
 
 // Re-export types for backwards compatibility
 export type { FinalVarMarker } from "./adapters/types.js";
@@ -106,6 +218,92 @@ console.log("Total:", total);
 Use THIS code in your next turn. Do NOT hardcode values or make up data.`;
 
   return synthesizedCode;
+}
+
+/**
+ * Generate classifier guidance from grep output
+ * Shows the model concrete example lines to use with (classify ...)
+ */
+function generateClassifierGuidance(
+  logs: string[],
+  query: string
+): string | null {
+  // Look for JSON array in logs that contains grep results
+  // The JSON may be spread across multiple log lines (pretty-printed)
+  let grepResults: Array<{ line: string; lineNum: number }> = [];
+
+  // First, try to find and parse multi-line JSON
+  const fullLog = logs.join("\n");
+
+  // Look for JSON array pattern in the combined logs
+  const jsonMatch = fullLog.match(/\[\s*\{[\s\S]*?\}\s*\]/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.line) {
+        grepResults = parsed;
+      }
+    } catch {
+      // Not valid JSON, continue
+    }
+  }
+
+  // Also try individual lines (single-line JSON)
+  if (grepResults.length === 0) {
+    for (const log of logs) {
+      const trimmed = log.trim();
+      if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          const arr = Array.isArray(parsed) ? parsed : [parsed];
+          if (arr.length > 0 && arr[0]?.line) {
+            grepResults = arr;
+            break;
+          }
+        } catch {
+          // Not valid JSON, continue
+        }
+      }
+    }
+  }
+
+  if (grepResults.length < 2) {
+    return null; // Need at least 2 results to show diverse examples
+  }
+
+  // Pick diverse example lines (first, middle, last if available)
+  const examples: string[] = [];
+  const indices = [0];
+  if (grepResults.length > 2) {
+    indices.push(Math.floor(grepResults.length / 2));
+  }
+  if (grepResults.length > 1) {
+    indices.push(grepResults.length - 1);
+  }
+
+  for (const idx of indices) {
+    const line = grepResults[idx].line;
+    // Escape quotes for S-expression string
+    const escaped = line.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    examples.push(escaped);
+  }
+
+  // Generate the guidance with concrete examples
+  return `
+## NEXT STEP: Build classifier from these EXACT lines
+
+Your grep found ${grepResults.length} matches. Now use (classify ...) to filter.
+
+Look at the query: "${query}"
+- Mark lines that answer the query as \`true\`
+- Mark lines that don't answer the query as \`false\`
+
+Example using YOUR grep output:
+(classify
+  "${examples[0]}" true
+  "${examples[examples.length > 1 ? 1 : 0]}" false)
+
+IMPORTANT: Copy the EXACT line strings from above. Do NOT paraphrase or modify them.`;
 }
 
 export interface RLMOptions {
@@ -328,7 +526,7 @@ export async function runRLM(
 ): Promise<unknown> {
   const {
     llmClient,
-    adapter = createBaseAdapter(),
+    adapter = createNucleusAdapter(),
     maxTurns = 10,
     turnTimeoutMs = 30000,
     maxSubCalls = 10,
@@ -449,6 +647,11 @@ export async function runRLM(
   let noCodeCount = 0;
   // Track last executed code to detect repetition
   let lastCode = "";
+  // Track result counts for better feedback
+  let lastResultCount = 0;
+  let previousResultCount = 0;
+  // Bindings for cross-turn state - allows referencing previous results
+  const solverBindings: Bindings = new Map();
 
   try {
     for (let turn = 1; turn <= maxTurns; turn++) {
@@ -509,25 +712,91 @@ Try again with proper formatting.`;
         const isRepeatedCode = code.trim() === lastCode.trim();
         if (isRepeatedCode) {
           log(`[Turn ${turn}] WARNING: Repeated code detected`);
-          history.push({ role: "user", content: adapter.getRepeatedCodeFeedback() });
+          history.push({ role: "user", content: adapter.getRepeatedCodeFeedback(lastResultCount) });
           continue;
         }
         lastCode = code;
 
-        log(`[Turn ${turn}] Executing code:`);
-        log("```javascript");
-        log(code);
-        log("```");
+        // NUCLEUS LC EXECUTION: All models use Lambda Calculus terms
+        // This reduces token entropy and allows formal verification
+        log(`[Turn ${turn}] Parsing LC term...`);
 
-        // Try to fix common syntax errors before execution
-        const fixResult = tryFixCode(code);
-        const codeToRun = fixResult.fixed ? fixResult.code : code;
+        // Parse the LC term
+        const lcResult = parseLC(code);
 
-        if (fixResult.fixed) {
-          log(`[Turn ${turn}] Applied auto-fixes: ${fixResult.fixes.join(", ")}`);
+        if (!lcResult.success || !lcResult.term) {
+          log(`[Turn ${turn}] LC parse error: ${lcResult.error}`);
+          log(`[Turn ${turn}] Failed to parse: ${code}`);
+          history.push({
+            role: "user",
+            content: adapter.getErrorFeedback(lcResult.error || "Parse error", code),
+          });
+          continue;
         }
 
-        const result = await sandbox.execute(codeToRun, turnTimeoutMs);
+        log(`[Turn ${turn}] LC term parsed successfully`);
+
+        // Type inference (fail-fast validation)
+        const typeResult = inferType(lcResult.term);
+        if (!typeResult.valid) {
+          log(`[Turn ${turn}] Type inference failed: ${typeResult.error}`);
+          history.push({
+            role: "user",
+            content: `Type error: ${typeResult.error}\n\nCheck your LC term structure.`,
+          });
+          continue;
+        }
+
+        if (typeResult.type) {
+          log(`[Turn ${turn}] Inferred type: ${typeToString(typeResult.type)}`);
+        }
+
+        // Validate classify examples against previous grep output
+        if (isClassifyTerm(lcResult.term)) {
+          const prevLogs = history
+            .filter((h) => h.role === "user" && h.content.includes("Logs:"))
+            .flatMap((h) => h.content.split("\n"));
+
+          const validationError = validateClassifyExamples(lcResult.term, prevLogs);
+          if (validationError) {
+            log(`[Turn ${turn}] Classify validation error: ${validationError}`);
+            history.push({
+              role: "user",
+              content: `ERROR: ${validationError}\n\nCopy the EXACT lines from the grep output above.`,
+            });
+            continue;
+          }
+        }
+
+        // Execute LC term directly using the solver (miniKanren-backed)
+        log(`[Turn ${turn}] Executing LC term with solver...`);
+        log(`[Turn ${turn}] Term: ${code}`);
+        if (solverBindings.size > 0) {
+          log(`[Turn ${turn}] Available bindings: ${[...solverBindings.keys()].join(", ")}`);
+        }
+
+        const solverTools = createSolverTools(documentContent);
+        const solverResult = solveTerm(lcResult.term, solverTools, solverBindings);
+
+        // Convert solver result to sandbox-compatible result format
+        const result = {
+          result: solverResult.value,
+          logs: solverResult.logs,
+          error: solverResult.success ? undefined : solverResult.error,
+        };
+
+        // Bind result for next turn - model can reference as RESULTS or _N
+        if (solverResult.success && solverResult.value !== null && solverResult.value !== undefined) {
+          solverBindings.set("RESULTS", solverResult.value);
+          solverBindings.set(`_${turn}`, solverResult.value);
+          // Track result count for better feedback
+          previousResultCount = lastResultCount;
+          lastResultCount = Array.isArray(solverResult.value) ? solverResult.value.length : 1;
+          log(`[Turn ${turn}] Bound result to RESULTS and _${turn}`);
+        } else {
+          previousResultCount = lastResultCount;
+          lastResultCount = 0;
+        }
 
         // Build execution feedback with truncation to minimize context passing
         const MAX_OUTPUT_LENGTH = 4000; // Max chars per output section
@@ -545,28 +814,25 @@ Try again with proper formatting.`;
           const logsText = result.logs.join("\n");
           feedback += `Logs:\n${truncate(logsText)}\n`;
 
-          // Detect [object Object] - model forgot to use JSON.stringify
-          const hasObjectObject = logsText.includes("[object Object]");
-          if (hasObjectObject) {
-            log(`[Turn ${turn}] Detected [object Object] - reminding to use JSON.stringify`);
-            feedback += `\n⚠️ WARNING: Your output shows [object Object] which means you logged an object without JSON.stringify().
-Use this pattern to see the actual data:
-\`\`\`javascript
-console.log(JSON.stringify(hits, null, 2));
-\`\`\`
-Or access properties directly:
-\`\`\`javascript
-for (const hit of hits) {
-  console.log(hit.line);  // Access the .line property
-}
-\`\`\`
-`;
+          // Use centralized feedback system to analyze execution
+          const executionFeedback = analyzeExecution({
+            code: code,
+            logs: result.logs,
+            error: result.error,
+            turn,
+          });
+
+          if (executionFeedback) {
+            log(`[Turn ${turn}] Detected issue: ${executionFeedback.type}`);
+            feedback += `\n${executionFeedback.message}\n`;
+            feedback += `\n${getEncouragement(turn, maxTurns)}\n`;
           }
 
           // Track meaningful output vs "done" / repeated patterns
           const isDoneOnly = result.logs.length === 1 && result.logs[0].toLowerCase().trim() === "done";
           const isRepeatedOutput = logsText === lastMeaningfulOutput;
-          const isUnhelpfulOutput = hasObjectObject || isDoneOnly;
+          const hasObjectObject = logsText.includes("[object Object]");
+          const isUnhelpfulOutput = hasObjectObject || isDoneOnly || (executionFeedback?.shouldReject ?? false);
 
           if (isUnhelpfulOutput || isRepeatedOutput) {
             lastOutputWasUnhelpful = true;
@@ -629,7 +895,7 @@ for (const hit of hits) {
           if (ragManager) {
             ragManager.recordFailure({
               query,
-              code: codeToRun,
+              code: code,
               error: result.error,
               timestamp: Date.now(),
               sessionId,
@@ -652,8 +918,14 @@ for (const hit of hits) {
           feedback += `\n${synthesizedCode}`;
         }
 
+        // Generate classifier guidance for search results
+        const classifierGuidance = generateClassifierGuidance(result.logs, query);
+        if (classifierGuidance) {
+          feedback += `\n${classifierGuidance}`;
+        }
+
         // Add adapter-specific success feedback (language reminders, etc.)
-        feedback += `\n\n${adapter.getSuccessFeedback()}`;
+        feedback += `\n\n${adapter.getSuccessFeedback(lastResultCount, previousResultCount)}`;
 
         history.push({ role: "user", content: feedback });
 

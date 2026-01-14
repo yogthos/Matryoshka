@@ -67,14 +67,17 @@ export interface ModelAdapter {
   /**
    * Get feedback message after successful code execution
    * Used to remind model about language requirements between turns
+   * @param resultCount - Optional count of results from execution (helps tailor feedback)
+   * @param previousCount - Optional count of results before this operation
    */
-  getSuccessFeedback(): string;
+  getSuccessFeedback(resultCount?: number, previousCount?: number): string;
 
   /**
    * Get feedback message when model repeats the same code
    * Encourages trying a different approach
+   * @param resultCount - Optional count of results from last execution (helps tailor feedback)
    */
-  getRepeatedCodeFeedback(): string;
+  getRepeatedCodeFeedback(resultCount?: number): string;
 }
 
 /**

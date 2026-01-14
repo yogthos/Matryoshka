@@ -43,21 +43,16 @@ describe("Adapter Registry", () => {
   });
 
   describe("detectAdapter", () => {
-    it("should detect qwen-barliman adapter from model name", () => {
-      expect(detectAdapter("qwen2.5-coder:7b")).toBe("qwen-barliman");
-      expect(detectAdapter("qwen-1.5:14b")).toBe("qwen-barliman");
-      expect(detectAdapter("codeqwen:latest")).toBe("qwen-barliman");
-    });
-
-    it("should detect deepseek adapter from model name", () => {
-      expect(detectAdapter("deepseek-chat")).toBe("deepseek");
-      expect(detectAdapter("deepseek-coder")).toBe("deepseek");
-    });
-
-    it("should fall back to base adapter for unknown models", () => {
-      expect(detectAdapter("llama3:latest")).toBe("base");
-      expect(detectAdapter("mistral:7b")).toBe("base");
-      expect(detectAdapter("unknown-model")).toBe("base");
+    it("should default to nucleus adapter for all models", () => {
+      // All models now use nucleus by default for LC-based synthesis
+      expect(detectAdapter("qwen2.5-coder:7b")).toBe("nucleus");
+      expect(detectAdapter("qwen-1.5:14b")).toBe("nucleus");
+      expect(detectAdapter("codeqwen:latest")).toBe("nucleus");
+      expect(detectAdapter("deepseek-chat")).toBe("nucleus");
+      expect(detectAdapter("deepseek-coder")).toBe("nucleus");
+      expect(detectAdapter("llama3:latest")).toBe("nucleus");
+      expect(detectAdapter("mistral:7b")).toBe("nucleus");
+      expect(detectAdapter("unknown-model")).toBe("nucleus");
     });
   });
 
@@ -67,14 +62,15 @@ describe("Adapter Registry", () => {
       expect(adapter.name).toBe("qwen");
     });
 
-    it("should auto-detect when no explicit adapter provided", () => {
+    it("should default to nucleus when no explicit adapter provided", () => {
+      // All models now default to nucleus for LC-based synthesis
       const adapter = resolveAdapter("qwen2.5-coder:7b");
-      expect(adapter.name).toBe("qwen-barliman");
+      expect(adapter.name).toBe("nucleus");
     });
 
-    it("should fall back to base for unknown models", () => {
+    it("should default to nucleus for any model", () => {
       const adapter = resolveAdapter("unknown-model");
-      expect(adapter.name).toBe("base");
+      expect(adapter.name).toBe("nucleus");
     });
 
     it("should fall back to base for unknown explicit adapter", () => {

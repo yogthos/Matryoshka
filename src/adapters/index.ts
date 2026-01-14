@@ -12,6 +12,7 @@ import { createQwenAdapter } from "./qwen.js";
 import { createDeepSeekAdapter } from "./deepseek.js";
 import { createQwenSynthesisAdapter } from "./qwen-synthesis.js";
 import { createQwenBarlimanAdapter } from "./qwen-barliman.js";
+import { createNucleusAdapter } from "./nucleus.js";
 
 // Re-export types
 export type { ModelAdapter, FinalVarMarker, AdapterFactory } from "./types.js";
@@ -25,21 +26,20 @@ const adapterFactories: Record<string, AdapterFactory> = {
   deepseek: createDeepSeekAdapter,
   "qwen-synthesis": createQwenSynthesisAdapter,
   "qwen-barliman": createQwenBarlimanAdapter,
+  nucleus: createNucleusAdapter,
 };
 
 /**
  * Model name patterns for auto-detection
  * Order matters - first match wins
- * Uses qwen-barliman by default for qwen models (Barliman-style constraint-based synthesis)
+ *
+ * IMPORTANT: All models now use the Nucleus adapter by default.
+ * Nucleus uses Lambda Calculus terms instead of JavaScript,
+ * which reduces token entropy and allows formal verification.
  */
 const modelPatterns: Array<{ pattern: RegExp; adapter: string }> = [
-  { pattern: /^qwen/i, adapter: "qwen-barliman" },
-  { pattern: /^codeqwen/i, adapter: "qwen-barliman" },
-  { pattern: /^deepseek/i, adapter: "deepseek" },
-  // Add more patterns as needed
-  // { pattern: /^llama/i, adapter: "llama" },
-  // { pattern: /^codellama/i, adapter: "llama" },
-  // { pattern: /^mistral/i, adapter: "mistral" },
+  // All models default to nucleus - LC-based synthesis
+  { pattern: /.*/, adapter: "nucleus" },
 ];
 
 /**
