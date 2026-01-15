@@ -29,22 +29,19 @@ function buildSystemPrompt(
 COMMANDS:
 (grep "pattern")                                    - search document
 (filter RESULTS (lambda x (match x "pattern" 0)))   - filter results
-(sum RESULTS)                                       - auto-extracts and sums numbers
-(count RESULTS)                                     - count items
+(map RESULTS (lambda x (match x "pattern" 1)))      - extract field from each result
+(sum RESULTS)                                       - sum numbers (for "total", "sum")
+(count RESULTS)                                     - count items (for "how many")
+
+QUERY TYPES - match your response to the query:
+- "list/show/what are" -> return the actual items: <<<FINAL>>>item1, item2, item3<<<END>>>
+- "how many/count" -> use (count RESULTS)
+- "total/sum" -> use (sum RESULTS)
 
 TYPE COERCION (use when you see specific data formats):
 (parseDate str)                                     - parse date -> "YYYY-MM-DD"
-(parseDate str "US")                                - parse MM/DD/YYYY format
 (parseCurrency str)                                 - parse "$1,234.56" -> 1234.56
 (parseNumber str)                                   - parse "1,234" or "50%" -> number
-(coerce term "date"|"currency"|"number")            - coerce to type
-(extract str "pattern" 0 "currency")                - extract and coerce
-
-SYNTHESIS (for complex transforms):
-(synthesize ("input1" output1) ("input2" output2))  - build function from examples
-
-Example synthesis: If you see "Jan 15, 2024" and need "2024-01-15":
-(map RESULTS (lambda x (parseDate x)))
 
 Output final answer as: <<<FINAL>>>answer<<<END>>>
 
@@ -262,10 +259,12 @@ function extractFinalAnswer(
 function getNoCodeFeedback(): string {
   return `Parse error: no valid command. Extract a keyword from the query and search:
 
-(grep "KEYWORD")   <- extract keyword from query, e.g., "SALES", "ERROR", "price"
+(grep "KEYWORD")   <- extract keyword from query, e.g., "SALES", "ERROR", "stage"
 
-Then aggregate: (sum RESULTS) or (count RESULTS)
-Then answer: <<<FINAL>>>answer<<<END>>>
+Then based on query type:
+- "list/show/what": output items directly <<<FINAL>>>item1, item2<<<END>>>
+- "how many/count": (count RESULTS)
+- "total/sum": (sum RESULTS)
 
 Next:`;
 }
@@ -308,7 +307,9 @@ Next:`;
     return `Found ${resultCount} matches.
 
 Check: Do these results answer "${query || 'the query'}"?
-- If yes: (sum RESULTS) or (count RESULTS) then output answer
+- For "list/show/what": output the items directly <<<FINAL>>>item1, item2...<<<END>>>
+- For "how many/count": (count RESULTS)
+- For "total/sum": (sum RESULTS)
 - If too broad: (filter RESULTS (lambda x (match x "specific_term" 0)))
 
 Next:`;
