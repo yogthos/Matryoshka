@@ -31,6 +31,41 @@ describe("MCP Server", () => {
       expect(analyzeTool?.description).toContain("Recursive Language Model");
     });
 
+    it("should have nucleus_execute tool", async () => {
+      const { createMCPServer } = await import("../src/mcp-server.js");
+      const server = createMCPServer();
+
+      const tools = server.getTools();
+      const nucleusTool = tools.find((t) => t.name === "nucleus_execute");
+
+      expect(nucleusTool).toBeDefined();
+      expect(nucleusTool?.description).toContain("Nucleus commands");
+    });
+
+    it("should have nucleus_commands tool", async () => {
+      const { createMCPServer } = await import("../src/mcp-server.js");
+      const server = createMCPServer();
+
+      const tools = server.getTools();
+      const commandsTool = tools.find((t) => t.name === "nucleus_commands");
+
+      expect(commandsTool).toBeDefined();
+      expect(commandsTool?.description).toContain("reference");
+    });
+
+    it("should have correct input schema for nucleus_execute", async () => {
+      const { createMCPServer } = await import("../src/mcp-server.js");
+      const server = createMCPServer();
+
+      const tools = server.getTools();
+      const nucleusTool = tools.find((t) => t.name === "nucleus_execute");
+
+      expect(nucleusTool?.inputSchema.properties).toHaveProperty("command");
+      expect(nucleusTool?.inputSchema.properties).toHaveProperty("filePath");
+      expect(nucleusTool?.inputSchema.required).toContain("command");
+      expect(nucleusTool?.inputSchema.required).toContain("filePath");
+    });
+
     it("should have correct input schema for analyze_document", async () => {
       const { createMCPServer } = await import("../src/mcp-server.js");
       const server = createMCPServer();
@@ -122,6 +157,89 @@ describe("MCP Server", () => {
       });
 
       expect(capturedMaxTurns).toBe(5);
+    });
+  });
+
+  describe("nucleus_execute tool", () => {
+    it("should execute grep command directly", async () => {
+      const { createMCPServer } = await import("../src/mcp-server.js");
+      const server = createMCPServer();
+
+      const result = await server.callTool("nucleus_execute", {
+        command: '(grep "test")',
+        filePath: "./test-fixtures/small.txt",
+      });
+
+      expect(result).toBeDefined();
+      expect(result.content[0].type).toBe("text");
+      expect(result.content[0].text).toContain("results");
+    });
+
+    it("should execute count command", async () => {
+      const { createMCPServer } = await import("../src/mcp-server.js");
+      const server = createMCPServer();
+
+      // First grep to populate RESULTS
+      await server.callTool("nucleus_execute", {
+        command: '(grep ".")',
+        filePath: "./test-fixtures/small.txt",
+        sessionId: "test-session",
+      });
+
+      // Then count
+      const result = await server.callTool("nucleus_execute", {
+        command: '(count RESULTS)',
+        filePath: "./test-fixtures/small.txt",
+        sessionId: "test-session",
+      });
+
+      expect(result.content[0].text).toMatch(/\d+/);
+    });
+
+    it("should handle invalid command gracefully", async () => {
+      const { createMCPServer } = await import("../src/mcp-server.js");
+      const server = createMCPServer();
+
+      const result = await server.callTool("nucleus_execute", {
+        command: '(invalid',
+        filePath: "./test-fixtures/small.txt",
+      });
+
+      expect(result.content[0].text).toContain("Error");
+    });
+
+    it("should handle missing file gracefully", async () => {
+      const { createMCPServer } = await import("../src/mcp-server.js");
+      const server = createMCPServer();
+
+      const result = await server.callTool("nucleus_execute", {
+        command: '(grep "test")',
+        filePath: "./nonexistent-file.txt",
+      });
+
+      expect(result.content[0].text).toMatch(/error/i);
+    });
+
+    it("should require command and filePath", async () => {
+      const { createMCPServer } = await import("../src/mcp-server.js");
+      const server = createMCPServer();
+
+      const result = await server.callTool("nucleus_execute", {});
+
+      expect(result.content[0].text).toContain("required");
+    });
+  });
+
+  describe("nucleus_commands tool", () => {
+    it("should return command reference", async () => {
+      const { createMCPServer } = await import("../src/mcp-server.js");
+      const server = createMCPServer();
+
+      const result = await server.callTool("nucleus_commands", {});
+
+      expect(result.content[0].text).toContain("grep");
+      expect(result.content[0].text).toContain("filter");
+      expect(result.content[0].text).toContain("RESULTS");
     });
   });
 
