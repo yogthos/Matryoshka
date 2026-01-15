@@ -8,7 +8,9 @@
   "bin": {
     "rlm": "dist/index.js",
     "rlm-mcp": "dist/mcp-server.js",
-    "nucleus-repl": "dist/repl/nucleus-repl.js"
+    "nucleus-repl": "dist/repl/nucleus-repl.js",
+    "nucleus-pipe": "dist/tool/adapters/pipe.js",
+    "nucleus-http": "dist/tool/adapters/http.js"
   },
   "exports": {
     ".": {
@@ -30,6 +32,10 @@
     "./repl": {
       "types": "./dist/repl/index.d.ts",
       "default": "./dist/repl/index.js"
+    },
+    "./tool": {
+      "types": "./dist/tool/index.d.ts",
+      "default": "./dist/tool/index.js"
     }
   },
   "files": [

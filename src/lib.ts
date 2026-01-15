@@ -19,6 +19,25 @@ export {
 // REPL
 export { startREPL, type REPLOptions } from "./repl/index.js";
 
+// Tool adapters
+export {
+  NucleusTool,
+  parseCommand,
+  formatResponse,
+  ClaudeCodeAdapter,
+  createClaudeCodeAdapter,
+  generateMCPConfig,
+  PipeAdapter,
+  startPipeAdapter,
+  HttpAdapter,
+  startHttpAdapter,
+  type NucleusCommand,
+  type NucleusResponse,
+  type ClaudeCodeToolDefinition,
+  type PipeAdapterOptions,
+  type HttpAdapterOptions,
+} from "./tool/index.js";
+
 // MCP Server
 export { createMCPServer, type MCPServerOptions, type MCPServerInstance, type MCPTool } from "./mcp-server.js";
 
