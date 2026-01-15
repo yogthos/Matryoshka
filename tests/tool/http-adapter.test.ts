@@ -44,10 +44,9 @@ describe("HttpAdapter", () => {
   });
 
   describe("getTool", () => {
-    it("should return the underlying NucleusTool", () => {
+    it("should return null when no session is active", () => {
       const tool = adapter.getTool();
-      expect(tool).toBeDefined();
-      expect(typeof tool.execute).toBe("function");
+      expect(tool).toBeNull();
     });
   });
 
@@ -70,7 +69,7 @@ describe("HttpAdapter", () => {
       expect(response.status).toBe(200);
       expect(data.success).toBe(true);
       expect(data.data.status).toBe("ok");
-      expect(data.data.loaded).toBe(false);
+      expect(data.data.session.active).toBe(false);
     });
 
     it("should handle /help endpoint", async () => {
@@ -85,15 +84,17 @@ describe("HttpAdapter", () => {
       expect(data.message).toContain("grep");
     });
 
-    it("should handle /bindings endpoint", async () => {
+    it("should handle /bindings without session", async () => {
       await adapter.start();
       const { port } = adapter.getServerInfo();
 
       const response = await fetch(`http://localhost:${port}/bindings`);
       const data = await response.json();
 
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
+      // Bindings requires an active session
+      expect(response.status).toBe(400);
+      expect(data.success).toBe(false);
+      expect(data.error).toContain("No active session");
     });
 
     it("should handle /stats without document", async () => {
