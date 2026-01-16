@@ -519,8 +519,17 @@ export class SynthesisIntegrator {
       };
     }
 
+    // Validate the pattern is a valid regex
+    let regex: RegExp;
+    try {
+      regex = new RegExp(pattern);
+    } catch {
+      // Pattern is not valid regex, try sophisticated synthesis
+      return this.synthesizePredicateViaRegex(trueExamples, falseExamples);
+    }
+
     const code = `(s) => /${pattern}/.test(s)`;
-    const fn = (s: string) => new RegExp(pattern).test(s);
+    const fn = (s: string) => regex.test(s);
 
     // Verify
     const allMatch = examples.every(
@@ -600,18 +609,22 @@ export class SynthesisIntegrator {
     const code = `(s) => {
       const rules = ${JSON.stringify(rules)};
       for (const rule of rules) {
-        if (new RegExp(rule.pattern).test(s)) {
-          return rule.output;
-        }
+        try {
+          if (new RegExp(rule.pattern).test(s)) {
+            return rule.output;
+          }
+        } catch { /* skip invalid pattern */ }
       }
       return null;
     }`;
 
     const fn = (s: string) => {
       for (const rule of rules) {
-        if (new RegExp(rule.pattern).test(s)) {
-          return rule.output;
-        }
+        try {
+          if (new RegExp(rule.pattern).test(s)) {
+            return rule.output;
+          }
+        } catch { /* skip invalid pattern */ }
       }
       return null;
     };
@@ -798,22 +811,30 @@ export class SynthesisIntegrator {
     // Verify that the OR pattern covers all true examples
     if (individualPatterns.length > 0) {
       const orPattern = individualPatterns.join("|");
-      const regex = new RegExp(orPattern);
-      const allTrueMatch = trueExamples.every((t) => regex.test(t));
-      const noFalseMatch = !falseExamples.some((f) => regex.test(f));
+      try {
+        const regex = new RegExp(orPattern);
+        const allTrueMatch = trueExamples.every((t) => regex.test(t));
+        const noFalseMatch = !falseExamples.some((f) => regex.test(f));
 
-      if (allTrueMatch && noFalseMatch) {
-        return orPattern;
+        if (allTrueMatch && noFalseMatch) {
+          return orPattern;
+        }
+      } catch {
+        // Invalid regex pattern, continue to next strategy
       }
     }
 
     // Strategy 3: Try finding common prefix pattern in true examples
     const truePattern = this.findCommonPattern(trueExamples);
-    if (
-      truePattern &&
-      !falseExamples.some((f) => new RegExp(truePattern).test(f))
-    ) {
-      return truePattern;
+    if (truePattern) {
+      try {
+        const trueRegex = new RegExp(truePattern);
+        if (!falseExamples.some((f) => trueRegex.test(f))) {
+          return truePattern;
+        }
+      } catch {
+        // Invalid regex pattern, fall through to return null
+      }
     }
 
     return null;
@@ -835,14 +856,19 @@ export class SynthesisIntegrator {
 
     if (coordResult.success && coordResult.regex) {
       const pattern = coordResult.regex;
-      const code = `(s) => /${pattern}/.test(s)`;
-      const fn = (s: string) => new RegExp(pattern).test(s);
+      try {
+        const regex = new RegExp(pattern);
+        const code = `(s) => /${pattern}/.test(s)`;
+        const fn = (s: string) => regex.test(s);
 
-      return {
-        success: true,
-        fn,
-        code,
-      };
+        return {
+          success: true,
+          fn,
+          code,
+        };
+      } catch {
+        // Invalid regex from coordinator
+      }
     }
 
     return {
