@@ -44,7 +44,10 @@ export type LCTerm =
   | LCConstrained
   | LCVar
   | LCApp
-  | LCLambda;
+  | LCLambda
+  | LCDefineFn
+  | LCApplyFn
+  | LCPredicate;
 
 /**
  * (input) - reference to the current input string
@@ -199,31 +202,45 @@ export interface LCParseFloat {
  * (parseDate <term> [format]) - parse string as date
  * Format hints: "ISO", "US", "EU", "auto" (default)
  * Returns ISO date string (YYYY-MM-DD) or null
+ * With :examples, synthesis fallback will be used if parsing fails
  */
 export interface LCParseDate {
   tag: "parseDate";
   str: LCTerm;
   format?: string;
+  examples?: SynthesisExample[];
+}
+
+/**
+ * Example pair for synthesis
+ */
+export interface SynthesisExample {
+  input: string;
+  output: unknown;
 }
 
 /**
  * (parseCurrency <term>) - parse currency string
  * Handles: $1,234.56, €1.234,56, 1,234, etc.
  * Returns number or null
+ * With :examples, synthesis fallback will be used if parsing fails
  */
 export interface LCParseCurrency {
   tag: "parseCurrency";
   str: LCTerm;
+  examples?: SynthesisExample[];
 }
 
 /**
  * (parseNumber <term>) - parse number with various formats
  * Handles: 1,234.56, 1.234,56 (EU), percentages, etc.
  * Returns number or null
+ * With :examples, synthesis fallback will be used if parsing fails
  */
 export interface LCParseNumber {
   tag: "parseNumber";
   str: LCTerm;
+  examples?: SynthesisExample[];
 }
 
 /**
@@ -244,6 +261,7 @@ export interface LCCoerce {
 /**
  * (extract <term> <pattern> [type]) - extract and optionally coerce
  * Combines match + coerce in one operation
+ * With :examples, synthesis fallback will be used if extraction fails
  */
 export interface LCExtract {
   tag: "extract";
@@ -251,6 +269,8 @@ export interface LCExtract {
   pattern: string;
   group: number;
   targetType?: CoercionType;
+  examples?: SynthesisExample[];
+  constraints?: Record<string, unknown>;
 }
 
 /**
@@ -314,6 +334,33 @@ export interface LCLambda {
   tag: "lambda";
   param: string;
   body: LCTerm;
+}
+
+/**
+ * (define-fn <name> :examples [...]) - define a named synthesized function
+ */
+export interface LCDefineFn {
+  tag: "define-fn";
+  name: string;
+  examples: SynthesisExample[];
+}
+
+/**
+ * (apply-fn <name> <arg>) - apply a named synthesized function
+ */
+export interface LCApplyFn {
+  tag: "apply-fn";
+  name: string;
+  arg: LCTerm;
+}
+
+/**
+ * (predicate <term> :examples [...]) - synthesize a predicate function
+ */
+export interface LCPredicate {
+  tag: "predicate";
+  str: LCTerm;
+  examples?: SynthesisExample[];
 }
 
 /**

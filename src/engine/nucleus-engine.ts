@@ -242,7 +242,19 @@ export class NucleusEngine {
     if (solverResult.success && solverResult.value !== null && solverResult.value !== undefined) {
       this.bindings.set(`_${this.turnCounter}`, solverResult.value);
 
-      if (Array.isArray(solverResult.value)) {
+      // Handle synthesized functions - store with _fn_ prefix for apply-fn
+      if (
+        typeof solverResult.value === "object" &&
+        solverResult.value !== null &&
+        "_type" in solverResult.value &&
+        (solverResult.value as { _type: string })._type === "synthesized-fn"
+      ) {
+        const fnObj = solverResult.value as { _type: string; name: string; fn: unknown; code: string };
+        this.bindings.set(`_fn_${fnObj.name}`, fnObj);
+        if (this.verbose) {
+          console.log(`[Engine] Registered function "${fnObj.name}" as _fn_${fnObj.name}`);
+        }
+      } else if (Array.isArray(solverResult.value)) {
         this.bindings.set("RESULTS", solverResult.value);
         if (this.verbose) {
           console.log(`[Engine] Bound ${solverResult.value.length} items to RESULTS and _${this.turnCounter}`);

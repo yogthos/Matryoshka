@@ -12,11 +12,12 @@
  * The LLM outputs LC intent, and this solver executes it.
  */
 
-import type { LCTerm, CoercionType } from "./types.js";
+import type { LCTerm, CoercionType, SynthesisExample } from "./types.js";
 import { resolveConstraints } from "./constraint-resolver.js";
 import { run, Rel, eq, conde, exist, failo, type Var, type Substitution } from "../minikanren/index.js";
 import { synthesizeExtractor, compileToFunction, prettyPrint, type Example } from "../synthesis/evalo/index.js";
 import { synthesizeFromExamples, deriveFunction } from "./relational-solver.js";
+import { SynthesisIntegrator } from "./synthesis-integrator.js";
 
 // Type for sandbox tools interface
 export interface SolverTools {
@@ -31,6 +32,11 @@ export interface SolverTools {
  * Maps variable names to their values from previous turns
  */
 export type Bindings = Map<string, unknown>;
+
+/**
+ * Module-level synthesis integrator for caching across calls
+ */
+const synthesisIntegrator = new SynthesisIntegrator();
 
 /**
  * Solve result
@@ -151,9 +157,9 @@ function evaluate(
       const startIdx = Math.max(0, term.start - 1);
       const endIdx = Math.min(allLines.length, term.end);
       const selectedLines = allLines.slice(startIdx, endIdx);
-      const content = selectedLines.join("\n");
-      log(`[Solver] Retrieved ${selectedLines.length} lines (${content.length} chars)`);
-      return content;
+      log(`[Solver] Retrieved ${selectedLines.length} lines`);
+      // Return array of strings to be compatible with filter/map
+      return selectedLines;
     }
 
     // ==========================
@@ -312,9 +318,9 @@ function evaluate(
 
       log(`[Solver] Found pattern: ${pattern}`);
 
-      // Return a classifier function
+      // Return a classifier function with case-insensitive matching
       return (line: string) => {
-        const regex = new RegExp(pattern);
+        const regex = new RegExp(pattern, "i");
         return regex.test(line);
       };
     }
@@ -363,6 +369,23 @@ function evaluate(
     case "parseDate": {
       const str = evaluate(term.str, tools, bindings, log);
       log(`[Lattice] Parsing date from: "${str}"`);
+
+      // If examples are provided, prefer synthesis for consistency
+      if (term.examples && term.examples.length > 0) {
+        log(`[Lattice] Using synthesis with ${term.examples.length} examples`);
+        const result = synthesisIntegrator.synthesizeOnFailure({
+          operation: "parseDate",
+          input: String(str),
+          examples: term.examples,
+        });
+        if (result.success && result.fn) {
+          const synthesized = result.fn(String(str));
+          log(`[Lattice] Synthesized result: ${synthesized}`);
+          return synthesized;
+        }
+      }
+
+      // Fall back to built-in parser
       const parsed = parseDate(String(str), term.format);
       log(`[Lattice] Parsed date: ${parsed}`);
       return parsed;
@@ -371,6 +394,23 @@ function evaluate(
     case "parseCurrency": {
       const str = evaluate(term.str, tools, bindings, log);
       log(`[Lattice] Parsing currency from: "${str}"`);
+
+      // If examples are provided, prefer synthesis for consistency
+      if (term.examples && term.examples.length > 0) {
+        log(`[Lattice] Using synthesis with ${term.examples.length} examples`);
+        const result = synthesisIntegrator.synthesizeOnFailure({
+          operation: "parseCurrency",
+          input: String(str),
+          examples: term.examples,
+        });
+        if (result.success && result.fn) {
+          const synthesized = result.fn(String(str));
+          log(`[Lattice] Synthesized result: ${synthesized}`);
+          return synthesized;
+        }
+      }
+
+      // Fall back to built-in parser
       const parsed = parseCurrency(String(str));
       log(`[Lattice] Parsed currency: ${parsed}`);
       return parsed;
@@ -379,6 +419,23 @@ function evaluate(
     case "parseNumber": {
       const str = evaluate(term.str, tools, bindings, log);
       log(`[Lattice] Parsing number from: "${str}"`);
+
+      // If examples are provided, prefer synthesis for consistency
+      if (term.examples && term.examples.length > 0) {
+        log(`[Lattice] Using synthesis with ${term.examples.length} examples`);
+        const result = synthesisIntegrator.synthesizeOnFailure({
+          operation: "parseNumber",
+          input: String(str),
+          examples: term.examples,
+        });
+        if (result.success && result.fn) {
+          const synthesized = result.fn(String(str));
+          log(`[Lattice] Synthesized result: ${synthesized}`);
+          return synthesized;
+        }
+      }
+
+      // Fall back to built-in parser
       const parsed = parseNumber(String(str));
       log(`[Lattice] Parsed number: ${parsed}`);
       return parsed;
@@ -399,11 +456,42 @@ function evaluate(
       }
       const regex = new RegExp(term.pattern, "i");
       const result = str.match(regex);
-      const extracted = result ? (result[term.group] ?? null) : null;
+      let extracted = result ? (result[term.group] ?? null) : null;
+
+      // If extraction failed and examples are provided, use synthesis
+      if (extracted === null && term.examples && term.examples.length > 0) {
+        log(`[Lattice] Regex extraction failed, trying synthesis with ${term.examples.length} examples`);
+        const synthesisResult = synthesisIntegrator.synthesizeOnFailure({
+          operation: "extract",
+          input: str,
+          examples: term.examples,
+        });
+        if (synthesisResult.success && synthesisResult.fn) {
+          const synthesized = synthesisResult.fn(str);
+          log(`[Lattice] Synthesized result: ${synthesized}`);
+          return synthesized;
+        }
+      }
 
       if (extracted !== null && term.targetType) {
         log(`[Lattice] Extracting and coercing to ${term.targetType}`);
-        return coerceValue(extracted, term.targetType);
+        const coerced = coerceValue(extracted, term.targetType);
+        // If coercion failed and examples are provided, use synthesis
+        if (coerced === null && term.examples && term.examples.length > 0) {
+          log(`[Lattice] Coercion failed, trying synthesis with ${term.examples.length} examples`);
+          const synthesisResult = synthesisIntegrator.synthesizeOnFailure({
+            operation: "extract",
+            input: str,
+            expectedType: term.targetType,
+            examples: term.examples,
+          });
+          if (synthesisResult.success && synthesisResult.fn) {
+            const synthesized = synthesisResult.fn(str);
+            log(`[Lattice] Synthesized result: ${synthesized}`);
+            return synthesized;
+          }
+        }
+        return coerced;
       }
       return extracted;
     }
@@ -485,6 +573,61 @@ function evaluate(
 
     case "constrained":
       return evaluate(term.term, tools, bindings, log);
+
+    case "define-fn": {
+      // Synthesize a function from examples and return it for storage
+      log(`[Lattice] Defining function "${term.name}" from ${term.examples.length} examples`);
+      const result = synthesisIntegrator.synthesizeOnFailure({
+        operation: "define-fn",
+        input: term.examples[0]?.input ?? "",
+        examples: term.examples,
+      });
+      if (result.success && result.fn) {
+        log(`[Lattice] Successfully synthesized function "${term.name}"`);
+        // Return an object that includes both the function and metadata
+        return {
+          _type: "synthesized-fn",
+          name: term.name,
+          fn: result.fn,
+          code: result.code,
+        };
+      }
+      log(`[Lattice] Failed to synthesize function "${term.name}"`);
+      return null;
+    }
+
+    case "apply-fn": {
+      // Look up stored function and apply it
+      const fnKey = `_fn_${term.name}`;
+      const storedFn = bindings.get(fnKey) as { _type: string; fn: (input: string) => unknown } | undefined;
+      if (!storedFn || storedFn._type !== "synthesized-fn") {
+        throw new Error(`apply-fn: function "${term.name}" not found in bindings`);
+      }
+      const arg = evaluate(term.arg, tools, bindings, log);
+      log(`[Lattice] Applying function "${term.name}" to "${arg}"`);
+      return storedFn.fn(String(arg));
+    }
+
+    case "predicate": {
+      // Synthesize a predicate from examples
+      const str = evaluate(term.str, tools, bindings, log);
+      if (term.examples && term.examples.length > 0) {
+        log(`[Lattice] Synthesizing predicate from ${term.examples.length} examples`);
+        const result = synthesisIntegrator.synthesizeOnFailure({
+          operation: "predicate",
+          input: String(str),
+          expectedType: "boolean",
+          examples: term.examples,
+        });
+        if (result.success && result.fn) {
+          const predicateResult = result.fn(String(str));
+          log(`[Lattice] Predicate result: ${predicateResult}`);
+          return Boolean(predicateResult);
+        }
+      }
+      // No examples - return truthiness of input
+      return Boolean(str);
+    }
 
     default:
       throw new Error(`Unknown term tag: ${(term as LCTerm).tag}`);
@@ -636,17 +779,62 @@ function evaluateWithBinding(
 
     case "parseDate": {
       const str = evaluateWithBinding(body.str, param, value, tools, bindings, log);
-      return parseDate(String(str), body.format);
+      const strValue = String(str);
+
+      // If examples are provided, prefer synthesis for consistency
+      if (body.examples && body.examples.length > 0) {
+        const result = synthesisIntegrator.synthesizeOnFailure({
+          operation: "parseDate",
+          input: strValue,
+          examples: body.examples,
+        });
+        if (result.success && result.fn) {
+          return result.fn(strValue);
+        }
+      }
+
+      // Fall back to built-in parser
+      return parseDate(strValue, body.format);
     }
 
     case "parseCurrency": {
       const str = evaluateWithBinding(body.str, param, value, tools, bindings, log);
-      return parseCurrency(String(str));
+      const strValue = String(str);
+
+      // If examples are provided, prefer synthesis for consistency
+      if (body.examples && body.examples.length > 0) {
+        const result = synthesisIntegrator.synthesizeOnFailure({
+          operation: "parseCurrency",
+          input: strValue,
+          examples: body.examples,
+        });
+        if (result.success && result.fn) {
+          return result.fn(strValue);
+        }
+      }
+
+      // Fall back to built-in parser
+      return parseCurrency(strValue);
     }
 
     case "parseNumber": {
       const str = evaluateWithBinding(body.str, param, value, tools, bindings, log);
-      return parseNumber(String(str));
+      const strValue = String(str);
+
+      // If examples are provided, prefer synthesis for consistency
+      if (body.examples && body.examples.length > 0) {
+        const result = synthesisIntegrator.synthesizeOnFailure({
+          operation: "parseNumber",
+          input: strValue,
+          examples: body.examples,
+        });
+        if (result.success && result.fn) {
+          return result.fn(strValue);
+        }
+      }
+
+      // Fall back to built-in parser
+      return parseNumber(strValue);
     }
 
     case "coerce": {
@@ -659,11 +847,58 @@ function evaluateWithBinding(
       if (typeof str !== "string") return null;
       const regex = new RegExp(body.pattern, "i");
       const result = str.match(regex);
-      const extracted = result ? (result[body.group] ?? null) : null;
+      let extracted = result ? (result[body.group] ?? null) : null;
+
+      // If extraction failed and examples are provided, use synthesis
+      if (extracted === null && body.examples && body.examples.length > 0) {
+        const synthesisResult = synthesisIntegrator.synthesizeOnFailure({
+          operation: "extract",
+          input: str,
+          examples: body.examples,
+        });
+        if (synthesisResult.success && synthesisResult.fn) {
+          return synthesisResult.fn(str);
+        }
+      }
+
       if (extracted !== null && body.targetType) {
-        return coerceValue(extracted, body.targetType);
+        const coerced = coerceValue(extracted, body.targetType);
+        // If coercion failed and examples are provided, use synthesis
+        if (coerced === null && body.examples && body.examples.length > 0) {
+          const synthesisResult = synthesisIntegrator.synthesizeOnFailure({
+            operation: "extract",
+            input: str,
+            expectedType: body.targetType,
+            examples: body.examples,
+          });
+          if (synthesisResult.success && synthesisResult.fn) {
+            return synthesisResult.fn(str);
+          }
+        }
+        return coerced;
       }
       return extracted;
+    }
+
+    case "predicate": {
+      const str = evaluateWithBinding(body.str, param, value, tools, bindings, log);
+      // Handle grep result objects - extract the line property
+      const strValue =
+        typeof str === "object" && str !== null && "line" in str
+          ? String((str as { line: string }).line)
+          : String(str);
+      if (body.examples && body.examples.length > 0) {
+        const result = synthesisIntegrator.synthesizeOnFailure({
+          operation: "predicate",
+          input: strValue,
+          expectedType: "boolean",
+          examples: body.examples,
+        });
+        if (result.success && result.fn) {
+          return Boolean(result.fn(strValue));
+        }
+      }
+      return Boolean(str);
     }
 
     default:

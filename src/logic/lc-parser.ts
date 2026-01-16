@@ -45,10 +45,13 @@ type Token =
   | { type: "rparen" }
   | { type: "lbracket" }
   | { type: "rbracket" }
+  | { type: "lbrace" }  // {
+  | { type: "rbrace" }  // }
   | { type: "tensor" } // ⊗
   | { type: "string"; value: string }
   | { type: "number"; value: number }
   | { type: "symbol"; value: string }
+  | { type: "keyword"; value: string }  // :examples, :type, etc.
   | { type: "boolean"; value: boolean };
 
 /**
@@ -79,7 +82,7 @@ function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Brackets for constraints
+    // Brackets for constraints and example lists
     if (ch === "[") {
       tokens.push({ type: "lbracket" });
       i++;
@@ -88,6 +91,30 @@ function tokenize(input: string): Token[] {
     if (ch === "]") {
       tokens.push({ type: "rbracket" });
       i++;
+      continue;
+    }
+
+    // Braces for constraint objects
+    if (ch === "{") {
+      tokens.push({ type: "lbrace" });
+      i++;
+      continue;
+    }
+    if (ch === "}") {
+      tokens.push({ type: "rbrace" });
+      i++;
+      continue;
+    }
+
+    // Keyword (starts with :)
+    if (ch === ":") {
+      i++;
+      let kw = "";
+      while (i < input.length && /[a-zA-Z_0-9]/.test(input[i])) {
+        kw += input[i];
+        i++;
+      }
+      tokens.push({ type: "keyword", value: kw });
       continue;
     }
 
@@ -124,7 +151,8 @@ function tokenize(input: string): Token[] {
                 str += '"';
                 break;
               default:
-                str += escaped;
+                // Preserve backslash for regex escape sequences like \$, \d, \w, etc.
+                str += "\\" + escaped;
             }
             i++;
           }
@@ -153,10 +181,10 @@ function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Symbol (including special characters for constraints)
+    // Symbol (including special characters for constraints and hyphen for compound names)
     if (/[a-zA-Z_Σμε⚡φ∞\/]/.test(ch)) {
       let sym = "";
-      while (i < input.length && /[a-zA-Z_0-9Σμε⚡φ∞\/]/.test(input[i])) {
+      while (i < input.length && /[a-zA-Z_0-9Σμε⚡φ∞\/\-]/.test(input[i])) {
         sym += input[i];
         i++;
       }
@@ -198,6 +226,104 @@ function peek(state: ParserState): Token | undefined {
  */
 function consume(state: ParserState): Token | undefined {
   return state.tokens[state.pos++];
+}
+
+/**
+ * Parse examples list: [("input" output) ...] or (("input" output) ...)
+ */
+function parseExamples(state: ParserState): Array<{ input: string; output: unknown }> | null {
+  const start = peek(state);
+  if (!start || (start.type !== "lbracket" && start.type !== "lparen")) {
+    return null;
+  }
+
+  const isParenList = start.type === "lparen";
+  consume(state); // [ or (
+
+  const examples: Array<{ input: string; output: unknown }> = [];
+
+  while (peek(state)) {
+    const next = peek(state);
+
+    // End of list
+    if (next?.type === "rbracket" || next?.type === "rparen") {
+      consume(state);
+      break;
+    }
+
+    // Expect (input output) pair
+    if (next?.type === "lparen") {
+      consume(state); // (
+      const input = parseTerm(state);
+      if (!input || input.tag !== "lit" || typeof input.value !== "string") {
+        return null;
+      }
+      const output = parseTerm(state);
+      if (!output || output.tag !== "lit") {
+        return null;
+      }
+      const closeParen = consume(state);
+      if (!closeParen || closeParen.type !== "rparen") {
+        return null;
+      }
+      examples.push({ input: input.value, output: output.value });
+    } else {
+      break;
+    }
+  }
+
+  return examples.length > 0 ? examples : null;
+}
+
+/**
+ * Parse constraint object: {:min 0 :max 100}
+ */
+function parseConstraintObject(state: ParserState): Record<string, unknown> | null {
+  const start = peek(state);
+  if (!start || start.type !== "lbrace") {
+    return null;
+  }
+
+  consume(state); // {
+
+  const constraints: Record<string, unknown> = {};
+
+  while (peek(state)) {
+    const next = peek(state);
+
+    // End of object
+    if (next?.type === "rbrace") {
+      consume(state);
+      break;
+    }
+
+    // Expect :key value pairs
+    if (next?.type === "keyword") {
+      consume(state);
+      const key = next.value;
+      const value = parseTerm(state);
+      if (value && value.tag === "lit") {
+        constraints[key] = value.value;
+      }
+    } else {
+      break;
+    }
+  }
+
+  return Object.keys(constraints).length > 0 ? constraints : null;
+}
+
+/**
+ * Check for and parse :examples keyword
+ */
+function parseExamplesKeyword(state: ParserState): Array<{ input: string; output: unknown }> | undefined {
+  const next = peek(state);
+  if (next?.type === "keyword" && next.value === "examples") {
+    consume(state); // :examples
+    const examples = parseExamples(state);
+    return examples ?? undefined;
+  }
+  return undefined;
 }
 
 /**
@@ -428,19 +554,22 @@ function parseList(state: ParserState): LCTerm | null {
         consume(state);
         format = formatTerm.value;
       }
-      return { tag: "parseDate", str, format };
+      const examples = parseExamplesKeyword(state);
+      return { tag: "parseDate", str, format, examples };
     }
 
     case "parseCurrency": {
       const str = parseTerm(state);
       if (!str) return null;
-      return { tag: "parseCurrency", str };
+      const examples = parseExamplesKeyword(state);
+      return { tag: "parseCurrency", str, examples };
     }
 
     case "parseNumber": {
       const str = parseTerm(state);
       if (!str) return null;
-      return { tag: "parseNumber", str };
+      const examples = parseExamplesKeyword(state);
+      return { tag: "parseNumber", str, examples };
     }
 
     case "coerce":
@@ -463,14 +592,29 @@ function parseList(state: ParserState): LCTerm | null {
       const group = parseTerm(state);
       if (!group || group.tag !== "lit" || typeof group.value !== "number")
         return null;
-      // Optional type hint
-      const typeTerm = peek(state);
+      // Optional type hint (string or :type keyword)
       let targetType: import("./types.js").CoercionType | undefined;
-      if (typeTerm && typeTerm.type === "string") {
+      const nextToken = peek(state);
+      if (nextToken && nextToken.type === "string") {
         consume(state);
-        targetType = typeTerm.value as import("./types.js").CoercionType;
+        targetType = nextToken.value as import("./types.js").CoercionType;
+      } else if (nextToken?.type === "keyword" && nextToken.value === "type") {
+        consume(state); // :type
+        const typeVal = parseTerm(state);
+        if (typeVal?.tag === "lit" && typeof typeVal.value === "string") {
+          targetType = typeVal.value as import("./types.js").CoercionType;
+        }
       }
-      return { tag: "extract", str, pattern: pattern.value, group: group.value, targetType };
+      // Optional :examples
+      const examples = parseExamplesKeyword(state);
+      // Optional :constraints
+      let constraints: Record<string, unknown> | undefined;
+      const constraintKw = peek(state);
+      if (constraintKw?.type === "keyword" && constraintKw.value === "constraints") {
+        consume(state); // :constraints
+        constraints = parseConstraintObject(state) ?? undefined;
+      }
+      return { tag: "extract", str, pattern: pattern.value, group: group.value, targetType, examples, constraints };
     }
 
     case "synthesize": {
@@ -512,15 +656,25 @@ function parseList(state: ParserState): LCTerm | null {
     }
 
     case "classify": {
-      // Parse pairs of (input output)
+      // Parse :examples keyword or pairs of (input output)
       const examples: Array<{ input: string; output: boolean | string | number }> = [];
-      while (peek(state) && peek(state)?.type !== "rparen") {
-        const input = parseTerm(state);
-        if (!input || input.tag !== "lit" || typeof input.value !== "string")
-          break;
-        const output = parseTerm(state);
-        if (!output || output.tag !== "lit") break;
-        examples.push({ input: input.value, output: output.value });
+
+      // Check for :examples keyword
+      const maybeKeywordExamples = parseExamplesKeyword(state);
+      if (maybeKeywordExamples) {
+        for (const ex of maybeKeywordExamples) {
+          examples.push({ input: ex.input, output: ex.output as boolean | string | number });
+        }
+      } else {
+        // Fallback to inline pairs
+        while (peek(state) && peek(state)?.type !== "rparen") {
+          const input = parseTerm(state);
+          if (!input || input.tag !== "lit" || typeof input.value !== "string")
+            break;
+          const output = parseTerm(state);
+          if (!output || output.tag !== "lit") break;
+          examples.push({ input: input.value, output: output.value });
+        }
       }
       if (examples.length < 2) return null;
       return { tag: "classify", examples };
@@ -534,6 +688,34 @@ function parseList(state: ParserState): LCTerm | null {
       const body = parseTerm(state);
       if (!body) return null;
       return { tag: "lambda", param: param.value, body };
+    }
+
+    case "define-fn": {
+      // (define-fn "name" :examples [...])
+      const nameTerm = parseTerm(state);
+      if (!nameTerm || nameTerm.tag !== "lit" || typeof nameTerm.value !== "string")
+        return null;
+      const examples = parseExamplesKeyword(state);
+      if (!examples || examples.length === 0) return null;
+      return { tag: "define-fn", name: nameTerm.value, examples };
+    }
+
+    case "apply-fn": {
+      // (apply-fn "name" arg)
+      const nameTerm = parseTerm(state);
+      if (!nameTerm || nameTerm.tag !== "lit" || typeof nameTerm.value !== "string")
+        return null;
+      const arg = parseTerm(state);
+      if (!arg) return null;
+      return { tag: "apply-fn", name: nameTerm.value, arg };
+    }
+
+    case "predicate": {
+      // (predicate term :examples [...])
+      const str = parseTerm(state);
+      if (!str) return null;
+      const examples = parseExamplesKeyword(state);
+      return { tag: "predicate", str, examples };
     }
 
     default:

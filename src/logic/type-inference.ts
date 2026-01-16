@@ -143,6 +143,43 @@ function infer(term: LCTerm, env: TypeEnv): LCType {
         result: bodyType,
       };
     }
+
+    // Synthesis-related terms
+    case "predicate":
+      // Predicate returns boolean
+      return { tag: "boolean" };
+
+    case "define-fn":
+      // define-fn stores function, returns confirmation
+      return { tag: "any" };
+
+    case "apply-fn":
+      // apply-fn returns whatever the function returns
+      return { tag: "any" };
+
+    case "extract":
+      // extract returns string or typed value
+      return { tag: "any" };
+
+    case "parseCurrency":
+      // parseCurrency returns number
+      return { tag: "number" };
+
+    case "parseDate":
+      // parseDate returns string (ISO format)
+      return { tag: "string" };
+
+    case "parseNumber":
+      // parseNumber returns number
+      return { tag: "number" };
+
+    case "lines":
+      // lines returns array of strings
+      return { tag: "array", element: { tag: "string" } };
+
+    default:
+      // Unknown terms return any
+      return { tag: "any" };
   }
 }
 

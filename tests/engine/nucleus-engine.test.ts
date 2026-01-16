@@ -152,8 +152,9 @@ describe("NucleusEngine", () => {
       const result = engine.execute('(lines 1 3)');
 
       expect(result.success).toBe(true);
-      expect(typeof result.value).toBe("string");
-      expect((result.value as string).split("\n").length).toBe(3);
+      // lines returns an array for compatibility with filter/map
+      expect(Array.isArray(result.value)).toBe(true);
+      expect((result.value as string[]).length).toBe(3);
     });
   });
 
