@@ -110,19 +110,33 @@ The LLM never writes JavaScript. It outputs Nucleus commands that Lattice execut
 
 ## Installation
 
-### npm (recommended)
+Install from npm:
 
 ```bash
 npm install -g matryoshka-rlm
 ```
 
-### npx (no install)
+Or run without installing:
 
 ```bash
 npx matryoshka-rlm "What is the total of all sales values?" ./report.txt
 ```
 
-### From source
+### Included Tools
+
+The package provides several CLI tools:
+
+| Command | Description |
+|---------|-------------|
+| `rlm` | Main CLI for document analysis with LLM reasoning |
+| `rlm-mcp` | MCP server exposing `analyze_document` tool |
+| `lattice-mcp` | MCP server exposing direct Nucleus commands (no LLM required) |
+| `lattice-repl` | Interactive REPL for Nucleus commands |
+| `lattice-http` | HTTP server for Nucleus queries |
+| `lattice-pipe` | Pipe adapter for programmatic access |
+| `lattice-setup` | Setup script for Claude Code integration |
+
+### From Source
 
 ```bash
 git clone https://github.com/yogthos/Matryoshka.git
@@ -203,6 +217,44 @@ RLM includes an MCP (Model Context Protocol) server that exposes the `analyze_do
 rlm-mcp --test
 # Output: MCP server ready
 # Output: Available tools: analyze_document
+```
+
+### Lattice MCP Server
+
+For direct access to the Nucleus engine without LLM orchestration, use `lattice-mcp`. This is useful when you want to run precise, programmatic queries.
+
+#### Lattice MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `lattice_load` | Load a document for analysis |
+| `lattice_query` | Execute Nucleus commands on the loaded document |
+| `lattice_close` | Close the session and free memory |
+| `lattice_status` | Get session status and document info |
+| `lattice_bindings` | Show current variable bindings |
+| `lattice_reset` | Reset bindings but keep document loaded |
+| `lattice_help` | Get Nucleus command reference |
+
+#### Example Lattice MCP config
+
+```json
+{
+  "mcp": {
+    "lattice": {
+      "type": "stdio",
+      "command": "lattice-mcp"
+    }
+  }
+}
+```
+
+#### Usage Pattern
+
+```
+1. lattice_load("/path/to/file.txt")  # Load document
+2. lattice_query('(grep "ERROR")')    # Search - results bound to RESULTS
+3. lattice_query('(count RESULTS)')   # Chain operations
+4. lattice_close()                    # Free memory when done
 ```
 
 ### Programmatic
