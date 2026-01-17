@@ -1,20 +1,25 @@
 #!/usr/bin/env node
 /**
- * Lattice MCP Server
+ * Lattice MCP Server - Handle-Based Document Analysis
  *
- * A stateful document analysis tool for LLM agents with session lifecycle management.
- * Uses Nucleus S-expression syntax for queries.
+ * A stateful document analysis tool that achieves 97%+ token savings by
+ * storing results in SQLite and returning only handle references to the LLM.
+ *
+ * KEY CONCEPT:
+ * - Query results are stored server-side, LLM sees only compact stubs
+ * - Use lattice_expand when you need to see actual data for decision-making
+ * - Chain operations via RESULTS without transferring full datasets
  *
  * SESSION LIFECYCLE:
  * - Sessions auto-expire after inactivity (default: 10 minutes)
  * - Loading a new document closes the previous session
  * - Explicit lattice_close tool for cleanup
- * - Memory is freed when session ends
  *
  * Usage:
  *   1. lattice_load - Load a document (starts session)
- *   2. lattice_query - Run queries (resets inactivity timer)
- *   3. lattice_close - Explicitly end session (or wait for timeout)
+ *   2. lattice_query - Run queries (returns handle stubs, not full data)
+ *   3. lattice_expand - Get full data when you need to inspect results
+ *   4. lattice_close - End session
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -24,7 +29,7 @@ import {
   ListToolsRequestSchema,
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { NucleusEngine } from "./engine/nucleus-engine.js";
+import { HandleSession } from "./engine/handle-session.js";
 import { getVersion } from "./version.js";
 
 // Configuration
@@ -32,16 +37,7 @@ const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_DOCUMENT_SIZE = 50 * 1024 * 1024; // 50MB limit
 
 // Session state
-interface Session {
-  engine: NucleusEngine;
-  documentPath: string;
-  documentSize: number;
-  loadedAt: Date;
-  lastAccessedAt: Date;
-  queryCount: number;
-}
-
-let session: Session | null = null;
+let session: HandleSession | null = null;
 let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
 function resetInactivityTimer(): void {
@@ -59,13 +55,16 @@ function resetInactivityTimer(): void {
 
 function closeSession(reason: string): void {
   if (session) {
-    const duration = Date.now() - session.loadedAt.getTime();
+    const info = session.getSessionInfo();
+    const duration = info.loadedAt ? Date.now() - info.loadedAt.getTime() : 0;
     console.error(
       `[Lattice] Session closed: ${reason} | ` +
-      `Document: ${session.documentPath} | ` +
+      `Document: ${info.documentPath} | ` +
       `Duration: ${Math.round(duration / 1000)}s | ` +
-      `Queries: ${session.queryCount}`
+      `Queries: ${info.queryCount} | ` +
+      `Handles: ${info.handleCount}`
     );
+    session.close();
     session = null;
   }
 
@@ -80,18 +79,20 @@ function getSessionInfo(): string {
     return "No active session";
   }
 
+  const info = session.getSessionInfo();
   const now = new Date();
-  const age = Math.round((now.getTime() - session.loadedAt.getTime()) / 1000);
-  const idle = Math.round((now.getTime() - session.lastAccessedAt.getTime()) / 1000);
+  const age = info.loadedAt ? Math.round((now.getTime() - info.loadedAt.getTime()) / 1000) : 0;
+  const idle = info.lastAccessedAt ? Math.round((now.getTime() - info.lastAccessedAt.getTime()) / 1000) : 0;
   const timeout = Math.round((SESSION_TIMEOUT_MS - idle * 1000) / 1000);
 
   return `Session active:
-  Document: ${session.documentPath}
-  Size: ${(session.documentSize / 1024).toFixed(1)} KB
+  Document: ${info.documentPath}
+  Size: ${(info.documentSize / 1024).toFixed(1)} KB
   Age: ${age}s
   Idle: ${idle}s
   Timeout in: ${Math.max(0, timeout)}s
-  Queries: ${session.queryCount}`;
+  Queries: ${info.queryCount}
+  Active handles: ${info.handleCount}`;
 }
 
 const TOOLS = [
@@ -105,15 +106,17 @@ RECOMMENDED WORKFLOW:
 3. Use Lattice for large files (>500 lines) - saves 80%+ tokens
 4. Chain queries: grep → filter → count/sum
 
+HOW HANDLES WORK:
+- Query results are stored server-side in SQLite
+- You receive a compact stub like "$res1: Array(1000) [preview...]"
+- Use lattice_expand to see full data when you need to make decisions
+- This saves 97%+ tokens compared to returning full results
+
 EFFICIENT QUERY PATTERNS:
 - Start broad: (grep "ERROR") to find all errors
 - Then narrow: (filter RESULTS (lambda x (match x "timeout" 0)))
 - Finally aggregate: (count RESULTS) or (sum RESULTS)
-
-TOKEN EFFICIENCY:
-- Results show preview (first 20 items), not full data
-- Use (count RESULTS) to get totals without listing all
-- Chain operations to refine without re-reading
+- Inspect when needed: use lattice_expand with limit
 
 SESSION: Document stays loaded for ${SESSION_TIMEOUT_MS / 60000} minutes.
 Call lattice_close when done.`,
@@ -132,28 +135,34 @@ Call lattice_close when done.`,
     name: "lattice_query",
     description: `Execute a Nucleus query on the loaded document.
 
-SEARCH (returns matches bound to RESULTS):
-  (grep "pattern")              Regex search - finds all matching lines
+RETURNS HANDLE STUBS (not full data):
+- Array results return a handle like "$res1: Array(500) [preview...]"
+- Scalar results (count, sum) return the value directly
+- Use lattice_expand when you need to see the actual data
+
+SEARCH (returns handle to matches):
+  (grep "pattern")              Regex search - returns handle to matching lines
   (fuzzy_search "query" 10)     Fuzzy search - top N matches by relevance
   (lines 10 20)                 Get specific line range
 
-AGGREGATE (returns scalar, RESULTS unchanged):
-  (count RESULTS)               Count items
-  (sum RESULTS)                 Sum numbers (auto-extracts from $1,234 format)
+AGGREGATE (returns scalar directly):
+  (count RESULTS)               Count items in current results
+  (sum RESULTS)                 Sum numeric values (auto-extracts from $1,234 format)
 
-TRANSFORM (returns new array, updates RESULTS):
+TRANSFORM (returns new handle):
   (filter RESULTS (lambda x (match x "pattern" 0)))
   (map RESULTS (lambda x (match x "(\\d+)" 1)))
 
 EXTRACT:
   (match str "pattern" 1)       Extract regex group from string
 
-EFFICIENT WORKFLOW:
-1. (grep "ERROR")                    → Find all errors
-2. (filter RESULTS ...)              → Narrow down
-3. (count RESULTS) or (sum RESULTS)  → Get final answer
+EXAMPLE WORKFLOW:
+1. (grep "ERROR")                    → Returns: $res1: Array(500) [preview]
+2. (filter RESULTS (lambda x ...))   → Returns: $res2: Array(50) [preview]
+3. (count RESULTS)                   → Returns: 50
+4. lattice_expand $res2 limit=10     → See 10 actual error messages
 
-Results are bound to RESULTS. Each turn also saves to _1, _2, etc.`,
+Results are bound to RESULTS. Previous results accessible via $res1, $res2, etc.`,
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -163,6 +172,52 @@ Results are bound to RESULTS. Each turn also saves to _1, _2, etc.`,
         },
       },
       required: ["command"],
+    },
+  },
+  {
+    name: "lattice_expand",
+    description: `Get full data from a handle when you need to inspect actual results.
+
+USE THIS WHEN:
+- You need to see actual content to make decisions
+- You want to verify what's in a result set
+- You need to extract specific data for your response
+
+PARAMETERS:
+- handle: The handle reference (e.g., "$res1")
+- limit: Max items to return (default: all) - use for large result sets
+- offset: Skip first N items (for pagination)
+- format: "full" (default) or "lines" (just line content with numbers)
+
+EXAMPLES:
+  lattice_expand $res1                    → Full data from handle
+  lattice_expand $res1 limit=10           → First 10 items only
+  lattice_expand $res1 offset=10 limit=10 → Items 11-20 (pagination)
+  lattice_expand $res1 format=lines       → "[1] line content..." format
+
+TIP: Start with a small limit to preview, then expand more if needed.`,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        handle: {
+          type: "string",
+          description: 'Handle reference to expand (e.g., "$res1")',
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of items to return (default: all)",
+        },
+        offset: {
+          type: "number",
+          description: "Number of items to skip (for pagination)",
+        },
+        format: {
+          type: "string",
+          enum: ["full", "lines"],
+          description: '"full" for complete objects, "lines" for readable line format',
+        },
+      },
+      required: ["handle"],
     },
   },
   {
@@ -179,7 +234,7 @@ Results are bound to RESULTS. Each turn also saves to _1, _2, etc.`,
   },
   {
     name: "lattice_status",
-    description: "Get current session status including document info, memory usage, and timeout.",
+    description: "Get current session status including document info, active handles, and timeout.",
     inputSchema: {
       type: "object" as const,
       properties: {},
@@ -188,7 +243,14 @@ Results are bound to RESULTS. Each turn also saves to _1, _2, etc.`,
   },
   {
     name: "lattice_bindings",
-    description: "Show current variable bindings (RESULTS, _1, _2, etc).",
+    description: `Show current handle bindings.
+
+Returns all active handles with their stubs:
+  $res1: Array(500) [preview of first item...]
+  $res2: Array(50) [preview...]
+  RESULTS: -> $res2
+
+Use this to see what data you have available before deciding what to expand.`,
     inputSchema: {
       type: "object" as const,
       properties: {},
@@ -197,7 +259,7 @@ Results are bound to RESULTS. Each turn also saves to _1, _2, etc.`,
   },
   {
     name: "lattice_reset",
-    description: "Reset variable bindings but keep document loaded.",
+    description: "Clear all handles and bindings but keep the document loaded. Use this to start fresh analysis.",
     inputSchema: {
       type: "object" as const,
       properties: {},
@@ -215,39 +277,76 @@ Results are bound to RESULTS. Each turn also saves to _1, _2, etc.`,
   },
 ];
 
-function formatResult(result: { success: boolean; value?: unknown; error?: string }): string {
+function formatHandleResult(result: {
+  success: boolean;
+  handle?: string;
+  stub?: string;
+  value?: unknown;
+  logs: string[];
+  error?: string;
+}): string {
   if (!result.success) {
     return `Error: ${result.error}`;
   }
 
-  const value = result.value;
-
-  if (Array.isArray(value)) {
-    const preview = value.slice(0, 20).map((item) => {
-      if (typeof item === "object" && item !== null && "line" in item) {
-        const gr = item as { line: string; lineNum: number };
-        return `[${gr.lineNum}] ${gr.line.slice(0, 100)}`;
-      }
-      return JSON.stringify(item).slice(0, 100);
-    });
-
-    let text = `Found ${value.length} results:\n${preview.join("\n")}`;
-    if (value.length > 20) {
-      text += `\n... and ${value.length - 20} more`;
-    }
+  // If we have a handle (array result), return the stub
+  if (result.handle && result.stub) {
+    let text = result.stub;
     text += "\n\nChain with (count RESULTS), (filter RESULTS ...), (map RESULTS ...), etc.";
+    text += "\nUse lattice_expand to see full data when needed.";
     return text;
   }
 
-  if (typeof value === "number") {
-    return `Result: ${value.toLocaleString()}`;
+  // Scalar result
+  if (typeof result.value === "number") {
+    return `Result: ${result.value.toLocaleString()}`;
   }
 
-  if (typeof value === "string") {
-    return value;
+  if (typeof result.value === "string") {
+    return result.value;
   }
 
-  return JSON.stringify(value, null, 2);
+  return JSON.stringify(result.value, null, 2);
+}
+
+function formatExpandResult(result: {
+  success: boolean;
+  data?: unknown[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  error?: string;
+}): string {
+  if (!result.success) {
+    return `Error: ${result.error}`;
+  }
+
+  const data = result.data!;
+  let text = `Showing ${data.length} of ${result.total} items`;
+  if (result.offset && result.offset > 0) {
+    text += ` (offset: ${result.offset})`;
+  }
+  text += ":\n\n";
+
+  for (const item of data) {
+    if (typeof item === "string") {
+      text += item + "\n";
+    } else if (typeof item === "object" && item !== null) {
+      const obj = item as Record<string, unknown>;
+      // Format nicely for line-based results
+      if ("lineNum" in obj && "line" in obj) {
+        text += `[${obj.lineNum}] ${obj.line}\n`;
+      } else if ("lineNum" in obj && "content" in obj) {
+        text += `[${obj.lineNum}] ${obj.content}\n`;
+      } else {
+        text += JSON.stringify(item) + "\n";
+      }
+    } else {
+      text += JSON.stringify(item) + "\n";
+    }
+  }
+
+  return text;
 }
 
 async function handleToolCall(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
@@ -264,35 +363,22 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
           closeSession("new document loaded");
         }
 
-        // Create new engine and load
-        const engine = new NucleusEngine();
-        await engine.loadFile(filePath);
-
-        const stats = engine.getStats();
-        if (!stats) {
-          return { content: [{ type: "text", text: "Error: Failed to get document stats" }] };
-        }
+        // Create new session
+        session = new HandleSession();
+        const stats = await session.loadFile(filePath);
 
         // Check size limit
-        if (stats.length > MAX_DOCUMENT_SIZE) {
+        if (stats.size > MAX_DOCUMENT_SIZE) {
+          session.close();
+          session = null;
           return {
             content: [{
               type: "text",
-              text: `Error: Document too large (${(stats.length / 1024 / 1024).toFixed(1)}MB). ` +
+              text: `Error: Document too large (${(stats.size / 1024 / 1024).toFixed(1)}MB). ` +
                 `Maximum size is ${MAX_DOCUMENT_SIZE / 1024 / 1024}MB.`,
             }],
           };
         }
-
-        // Create session
-        session = {
-          engine,
-          documentPath: filePath,
-          documentSize: stats.length,
-          loadedAt: new Date(),
-          lastAccessedAt: new Date(),
-          queryCount: 0,
-        };
 
         // Start inactivity timer
         resetInactivityTimer();
@@ -304,8 +390,10 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
             type: "text",
             text: `Loaded ${filePath}:\n` +
               `  Lines: ${stats.lineCount.toLocaleString()}\n` +
-              `  Size: ${(stats.length / 1024).toFixed(1)} KB\n` +
+              `  Size: ${(stats.size / 1024).toFixed(1)} KB\n` +
               `  Session timeout: ${SESSION_TIMEOUT_MS / 60000} minutes\n\n` +
+              `Results will be returned as handle stubs (97%+ token savings).\n` +
+              `Use lattice_expand to see full data when needed.\n\n` +
               `Ready for queries. Call lattice_close when done.`,
           }],
         };
@@ -326,13 +414,36 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
           return { content: [{ type: "text", text: "Error: command is required" }] };
         }
 
-        // Update session
-        session.lastAccessedAt = new Date();
-        session.queryCount++;
         resetInactivityTimer();
 
-        const result = session.engine.execute(command);
-        return { content: [{ type: "text", text: formatResult(result) }] };
+        const result = session.execute(command);
+        return { content: [{ type: "text", text: formatHandleResult(result) }] };
+      }
+
+      case "lattice_expand": {
+        if (!session) {
+          return {
+            content: [{
+              type: "text",
+              text: "Error: No active session. Use lattice_load first.",
+            }],
+          };
+        }
+
+        const handle = args.handle as string;
+        if (!handle) {
+          return { content: [{ type: "text", text: "Error: handle is required" }] };
+        }
+
+        resetInactivityTimer();
+
+        const result = session.expand(handle, {
+          limit: args.limit as number | undefined,
+          offset: args.offset as number | undefined,
+          format: args.format as "full" | "lines" | undefined,
+        });
+
+        return { content: [{ type: "text", text: formatExpandResult(result) }] };
       }
 
       case "lattice_close": {
@@ -340,9 +451,10 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
           return { content: [{ type: "text", text: "No active session to close." }] };
         }
 
-        const info = `Closed session for ${session.documentPath} (${session.queryCount} queries)`;
+        const info = session.getSessionInfo();
+        const summary = `Closed session for ${info.documentPath} (${info.queryCount} queries, ${info.handleCount} handles)`;
         closeSession("explicit close");
-        return { content: [{ type: "text", text: info }] };
+        return { content: [{ type: "text", text: summary }] };
       }
 
       case "lattice_status": {
@@ -354,11 +466,9 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
           return { content: [{ type: "text", text: "No active session." }] };
         }
 
-        // Update access time
-        session.lastAccessedAt = new Date();
         resetInactivityTimer();
 
-        const bindings = session.engine.getBindings();
+        const bindings = session.getBindings();
         if (Object.keys(bindings).length === 0) {
           return { content: [{ type: "text", text: "No bindings yet. Run a query first." }] };
         }
@@ -367,7 +477,7 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
         return {
           content: [{
             type: "text",
-            text: `Current bindings:\n${lines.join("\n")}`,
+            text: `Current bindings:\n${lines.join("\n")}\n\nUse lattice_expand <handle> to see full data.`,
           }],
         };
       }
@@ -377,16 +487,15 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
           return { content: [{ type: "text", text: "No active session." }] };
         }
 
-        session.engine.reset();
-        session.lastAccessedAt = new Date();
+        session.reset();
         resetInactivityTimer();
 
-        return { content: [{ type: "text", text: "Bindings reset. Document still loaded." }] };
+        return { content: [{ type: "text", text: "Bindings and handles cleared. Document still loaded." }] };
       }
 
       case "lattice_help": {
         return {
-          content: [{ type: "text", text: NucleusEngine.getCommandReference() }],
+          content: [{ type: "text", text: HandleSession.getCommandReference() }],
         };
       }
 
@@ -441,9 +550,10 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  console.error("[Lattice] MCP server started");
+  console.error("[Lattice] MCP server started (handle-based mode)");
   console.error(`[Lattice] Session timeout: ${SESSION_TIMEOUT_MS / 1000}s`);
   console.error(`[Lattice] Max document size: ${MAX_DOCUMENT_SIZE / 1024 / 1024}MB`);
+  console.error("[Lattice] Query results return handle stubs for 97%+ token savings");
 }
 
 main().catch((err) => {
