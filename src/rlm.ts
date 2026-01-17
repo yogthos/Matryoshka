@@ -607,26 +607,9 @@ export async function runRLM(
   // Create solver tools for document operations
   const solverTools = createSolverTools(documentContent);
 
-  // Pre-search disabled: Let the LLM make its own queries to get full context
-  // This ensures the LLM sees complete line data and can make informed filtering decisions
-  const preSearchResults: Array<{ match: string; line: string; lineNum: number }> = [];
-  const preSearchKeyword = "";
-
   // Build user message with optional constraints
   let userMessage = `Query: ${query}`;
 
-  // Include pre-search results if found
-  if (preSearchResults.length > 0) {
-    userMessage += `\n\nPre-search for "${preSearchKeyword}" found ${preSearchResults.length} matches:`;
-    const sampleResults = preSearchResults.slice(0, 10);
-    for (const r of sampleResults) {
-      userMessage += `\n  [line ${r.lineNum}] ${r.line.slice(0, 100)}`;
-    }
-    if (preSearchResults.length > 10) {
-      userMessage += `\n  ... and ${preSearchResults.length - 10} more`;
-    }
-    userMessage += `\n\nRESULTS is pre-populated with these matches. You can use (sum RESULTS), (count RESULTS), or (filter RESULTS ...) directly.`;
-  }
   if (constraint) {
     userMessage += `\n\n## OUTPUT CONSTRAINTS\n`;
     userMessage += `Your final answer MUST satisfy these constraints:\n`;
@@ -673,14 +656,6 @@ export async function runRLM(
   let previousResultCount = 0;
   // Bindings for cross-turn state - allows referencing previous results
   const solverBindings: Bindings = new Map();
-
-  // Pre-populate bindings with pre-search results
-  if (preSearchResults.length > 0) {
-    solverBindings.set("RESULTS", preSearchResults);
-    solverBindings.set("_0", preSearchResults);
-    lastResultCount = preSearchResults.length;
-    log(`[Pre-search] RESULTS pre-populated with ${preSearchResults.length} matches`);
-  }
 
   try {
     for (let turn = 1; turn <= maxTurns; turn++) {

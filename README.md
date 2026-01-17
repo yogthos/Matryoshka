@@ -87,29 +87,6 @@ Handle-based: LLM sees stub          [50 tokens: "$res1: Array(1000) [preview...
 - `FTS5Search` - Phrase queries, boolean operators, relevance ranking
 - `CheckpointManager` - Save/restore session state
 
-### Pre-Search Optimization
-
-Before calling the LLM, the system extracts keywords from your query and pre-runs grep:
-
-```
-Query: "What is the total of all north sales data values?"
-                    │
-                    ▼
-┌─────────────────────────────────────────────────────┐
-│ Pre-search extracts: "north", "sales", "data"       │
-│ Tries compound patterns: SALES.*NORTH, NORTH.*SALES │
-│ Pre-populates RESULTS before LLM is called          │
-└─────────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────────┐
-│ LLM receives: "RESULTS has 1 match"                 │
-│ LLM outputs: (sum RESULTS)  ← skips search step!    │
-└─────────────────────────────────────────────────────┘
-```
-
-This saves turns by pre-populating `RESULTS` so the model can immediately aggregate.
-
 ### The Role of the LLM
 
 The LLM does **reasoning**, not code generation:
@@ -130,7 +107,6 @@ The LLM never writes JavaScript. It outputs Nucleus commands that Lattice execut
 | **Lattice Solver** | Executes commands against document |
 | **SQLite Persistence** | Handle-based storage with FTS5 (97% token savings) |
 | **miniKanren** | Relational engine for classification |
-| **Pre-Search** | Extracts keywords and pre-runs grep |
 | **RAG Hints** | Few-shot examples from past successes |
 
 ## Installation
@@ -283,27 +259,29 @@ const result = await runRLM("What is the total of all sales values?", "./report.
 ```
 $ rlm "What is the total of all north sales data values?" ./report.txt --verbose
 
-[Pre-search] Found 1 data matches for "SALES.*NORTH"
-[Pre-search] RESULTS pre-populated with 1 matches
-
 ──────────────────────────────────────────────────
 [Turn 1/10] Querying LLM...
-[Turn 1] Term: (sum RESULTS)
-[Turn 1] Console output:
-  [Lattice] Summing 1 values
-  [Lattice] Sum = 2340000
-[Turn 1] Result: 2340000
+[Turn 1] Term: (grep "SALES.*NORTH")
+[Turn 1] Result: 1 matches
 
 ──────────────────────────────────────────────────
 [Turn 2/10] Querying LLM...
-[Turn 2] Final answer received
+[Turn 2] Term: (sum RESULTS)
+[Turn 2] Console output:
+  [Lattice] Summing 1 values
+  [Lattice] Sum = 2340000
+[Turn 2] Result: 2340000
+
+──────────────────────────────────────────────────
+[Turn 3/10] Querying LLM...
+[Turn 3] Final answer received
 
 2340000
 ```
 
 The model:
-1. Received pre-populated RESULTS (pre-search found the data)
-2. Immediately summed the results (no grep needed)
+1. Searched for relevant data with grep
+2. Summed the matching results
 3. Output the final answer
 
 ## Nucleus DSL Reference
