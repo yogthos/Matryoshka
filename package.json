@@ -1,6 +1,6 @@
 {
   "name": "matryoshka-rlm",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
   "description": "Recursive Language Model - Process documents larger than LLM context windows",
   "main": "dist/lib.js",
