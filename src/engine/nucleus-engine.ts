@@ -375,10 +375,13 @@ SYNTHESIS:
   (synthesize (example "in1" out1) (example "in2" out2) ...)
                                 Synthesize function from examples
 
-VARIABLES:
+VARIABLES (for use in queries):
   RESULTS                       Last array result (auto-bound)
   _1, _2, _3, ...              Results from turn N (auto-bound)
   context                       Raw document content
+
+NOTE: $res1, $res2, etc. are handle stubs for lattice_expand only.
+      Use RESULTS or _1, _2, _3 to reference previous results in queries.
 `;
   }
 }

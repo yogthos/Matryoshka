@@ -162,7 +162,10 @@ EXAMPLE WORKFLOW:
 3. (count RESULTS)                   → Returns: 50
 4. lattice_expand $res2 limit=10     → See 10 actual error messages
 
-Results are bound to RESULTS. Previous results accessible via $res1, $res2, etc.`,
+VARIABLE BINDING:
+- RESULTS: Always points to the last array result (use in queries)
+- _1, _2, _3, ...: Results from turn N (use in queries for older results)
+- $res1, $res2, ...: Handle stubs (use ONLY with lattice_expand, NOT in queries)`,
     inputSchema: {
       type: "object" as const,
       properties: {
