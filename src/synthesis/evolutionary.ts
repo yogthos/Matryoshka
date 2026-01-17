@@ -3,24 +3,15 @@
  * Refines partial programs through constraints and reuses knowledge base
  */
 
-import {
-  LVar,
-  Goal,
-  conj,
-  run,
-  reify,
-  Substitution,
-} from "./minikanren/core.js";
 import { KnowledgeBase, SynthesizedComponent } from "./knowledge-base.js";
 import { synthesizeRegex } from "./regex/synthesis.js";
 
 /**
- * Partial program with holes (logic variables)
+ * Partial program with holes
  */
 export interface PartialProgram {
   template: string; // Template with placeholders like ${0}, ${1}
-  holes: LVar[]; // Logic variables for the holes
-  constraints: Goal[]; // Constraints on the holes
+  holes: string[]; // Hole names
   examples: Array<{ input: string; output: unknown }>;
 }
 
@@ -39,25 +30,10 @@ export class EvolutionarySynthesizer {
   initialize(
     examples: Array<{ input: string; output: unknown }>
   ): PartialProgram {
-    // Create hole for the entire extraction logic
-    const extractionHole = new LVar("extraction");
-
     return {
       template: "(input) => ${0}",
-      holes: [extractionHole],
-      constraints: [],
+      holes: ["extraction"],
       examples,
-    };
-  }
-
-  /**
-   * Refine a partial program by adding constraints
-   * Key evolutionary step - narrows the search space
-   */
-  refine(program: PartialProgram, constraint: Goal): PartialProgram {
-    return {
-      ...program,
-      constraints: [...program.constraints, constraint],
     };
   }
 
@@ -71,14 +47,7 @@ export class EvolutionarySynthesizer {
       return kbSolutions.slice(0, maxSolutions);
     }
 
-    // If we have constraints, use miniKanren to solve
-    if (program.constraints.length > 0) {
-      const combined = conj(...program.constraints);
-      const solutions = run(combined, maxSolutions);
-      return solutions.map((s) => this.instantiate(program, s));
-    }
-
-    // Otherwise, try to synthesize from examples
+    // Try to synthesize from examples
     const synthesized = this.synthesizeNew(program);
     if (synthesized) {
       return [synthesized];
@@ -116,9 +85,6 @@ export class EvolutionarySynthesizer {
   private synthesizeNew(program: PartialProgram): string | null {
     const inputs = program.examples.map((e) => e.input);
     const outputs = program.examples.map((e) => e.output);
-
-    // Determine output type
-    const outputType = typeof outputs[0];
 
     // Try regex-based extraction
     const regexResult = synthesizeRegex({
@@ -280,18 +246,6 @@ export class EvolutionarySynthesizer {
    */
   private escapeRegexInString(pattern: string): string {
     return pattern.replace(/\\/g, "\\\\");
-  }
-
-  /**
-   * Instantiate template with values from substitution
-   */
-  private instantiate(program: PartialProgram, solution: Substitution): string {
-    let code = program.template;
-    for (let i = 0; i < program.holes.length; i++) {
-      const value = reify(program.holes[i], solution);
-      code = code.replace(`\${${i}}`, String(value));
-    }
-    return code;
   }
 
   /**

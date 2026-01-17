@@ -3,21 +3,6 @@
  * Exports all synthesis-related functionality
  */
 
-// Core miniKanren
-export {
-  LVar,
-  type Goal,
-  type Substitution,
-  unify,
-  eq,
-  conj,
-  disj,
-  fresh,
-  run,
-  reify,
-  walk,
-} from "./minikanren/core.js";
-
 // Regex synthesis
 export {
   synthesizeRegex,
