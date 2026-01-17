@@ -1,5 +1,7 @@
 # Recursive Language Model (RLM)
 
+[![Tests](https://github.com/yogthos/Matryoshka/actions/workflows/test.yml/badge.svg)](https://github.com/yogthos/Matryoshka/actions/workflows/test.yml)
+
 Process documents 100x larger than your LLM's context window—without vector databases or chunking heuristics.
 
 ## The Problem
