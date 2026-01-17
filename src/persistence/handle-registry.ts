@@ -54,8 +54,10 @@ export class HandleRegistry {
       if (typeof firstItem === "object" && firstItem !== null) {
         // For objects, show abbreviated first item
         const obj = firstItem as Record<string, unknown>;
-        if ("line" in obj) {
-          const line = String(obj.line);
+        // Check for common line content fields
+        const lineContent = obj.line ?? obj.content ?? obj.text;
+        if (lineContent !== undefined) {
+          const line = String(lineContent);
           preview = line.length > 50 ? line.slice(0, 50) + "..." : line;
         } else {
           const keys = Object.keys(obj).slice(0, 3);
