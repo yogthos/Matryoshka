@@ -152,7 +152,6 @@ The package provides several CLI tools:
 | Command | Description |
 |---------|-------------|
 | `rlm` | Main CLI for document analysis with LLM reasoning |
-| `rlm-mcp` | MCP server exposing `analyze_document` tool |
 | `lattice-mcp` | MCP server exposing direct Nucleus commands (no LLM required) |
 | `lattice-repl` | Interactive REPL for Nucleus commands |
 | `lattice-http` | HTTP server for Nucleus queries |
@@ -210,55 +209,24 @@ rlm --help
 
 ### MCP Integration
 
-RLM includes an MCP (Model Context Protocol) server that exposes the `analyze_document` tool. This allows coding agents to analyze documents that exceed their context window.
+RLM includes `lattice-mcp`, an MCP (Model Context Protocol) server for direct access to the Nucleus engine. This allows coding agents to analyze documents with **80%+ token savings** compared to reading files directly.
 
-#### MCP Tool: `analyze_document`
+The key advantage is **handle-based results**: query results are stored server-side in SQLite, and the agent receives compact stubs like `$res1: Array(1000) [preview...]` instead of full data. Operations chain server-side without roundtripping data.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `query` | string | Yes | The question or task to perform on the document |
-| `filePath` | string | Yes | Absolute path to the document file |
-| `maxTurns` | number | No | Maximum exploration turns (default: 10) |
-| `timeoutMs` | number | No | Timeout per turn in milliseconds (default: 30000) |
-
-#### Example MCP config
-
-```json
-{
-  "mcp": {
-    "rlm": {
-      "type": "stdio",
-      "command": "rlm-mcp"
-    }
-  }
-}
-```
-
-#### Testing the MCP Server
-
-```bash
-rlm-mcp --test
-# Output: MCP server ready
-# Output: Available tools: analyze_document
-```
-
-### Lattice MCP Server
-
-For direct access to the Nucleus engine without LLM orchestration, use `lattice-mcp`. This is useful when you want to run precise, programmatic queries with **80%+ token savings** compared to reading files directly.
-
-#### Lattice MCP Tools
+#### Available Tools
 
 | Tool | Description |
 |------|-------------|
 | `lattice_load` | Load a document for analysis |
 | `lattice_query` | Execute Nucleus commands on the loaded document |
+| `lattice_expand` | Expand a handle to see full data (with optional limit/offset) |
 | `lattice_close` | Close the session and free memory |
 | `lattice_status` | Get session status and document info |
 | `lattice_bindings` | Show current variable bindings |
 | `lattice_reset` | Reset bindings but keep document loaded |
 | `lattice_help` | Get Nucleus command reference |
 
-#### Example Lattice MCP config
+#### Example MCP config
 
 ```json
 {
@@ -275,17 +243,19 @@ For direct access to the Nucleus engine without LLM orchestration, use `lattice-
 
 ```
 1. lattice_load("/path/to/large-file.txt")   # Load document (use for >500 lines)
-2. lattice_query('(grep "ERROR")')           # Search - shows preview of first 20
-3. lattice_query('(filter RESULTS ...)')     # Narrow down - updates RESULTS
-4. lattice_query('(count RESULTS)')          # Get count without listing all
-5. lattice_close()                           # Free memory when done
+2. lattice_query('(grep "ERROR")')           # Search - returns handle stub $res1
+3. lattice_query('(filter RESULTS ...)')     # Narrow down - returns handle stub $res2
+4. lattice_query('(count RESULTS)')          # Get count without seeing data
+5. lattice_expand("$res2", limit=10)         # Expand only what you need to see
+6. lattice_close()                           # Free memory when done
 ```
 
 **Token efficiency tips:**
-- Use `(count RESULTS)` instead of viewing all results
+- Query results return handle stubs, not full data
+- Use `lattice_expand` with `limit` to see only what you need
 - Chain `grep → filter → count/sum` to refine progressively
-- Results show preview (first 20), use filter to narrow down
-- Previous results available as `_1`, `_2`, etc.
+- Use `RESULTS` in queries (always points to last result)
+- Use `$res1`, `$res2` etc. with `lattice_expand` to inspect specific results
 
 ### Programmatic
 
