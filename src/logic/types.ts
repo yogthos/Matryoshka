@@ -47,7 +47,10 @@ export type LCTerm =
   | LCLambda
   | LCDefineFn
   | LCApplyFn
-  | LCPredicate;
+  | LCPredicate
+  | LCListSymbols
+  | LCGetSymbolBody
+  | LCFindReferences;
 
 /**
  * (input) - reference to the current input string
@@ -361,6 +364,33 @@ export interface LCPredicate {
   tag: "predicate";
   str: LCTerm;
   examples?: SynthesisExample[];
+}
+
+/**
+ * (list_symbols [kind]) - list symbols from tree-sitter AST
+ * Optionally filter by kind: "function", "class", "method", "interface", etc.
+ */
+export interface LCListSymbols {
+  tag: "list_symbols";
+  kind?: string;
+}
+
+/**
+ * (get_symbol_body <symbol>) - get the source code body for a symbol
+ * Symbol can be a name string or a symbol object from list_symbols
+ */
+export interface LCGetSymbolBody {
+  tag: "get_symbol_body";
+  symbol: LCTerm;
+}
+
+/**
+ * (find_references <name>) - find all references to an identifier
+ * Returns array of lines containing references
+ */
+export interface LCFindReferences {
+  tag: "find_references";
+  name: string;
 }
 
 /**

@@ -726,6 +726,32 @@ function parseList(state: ParserState): LCTerm | null {
       return { tag: "predicate", str, examples };
     }
 
+    case "list_symbols": {
+      // (list_symbols) or (list_symbols "kind")
+      const kindTerm = peek(state);
+      if (kindTerm && kindTerm.type === "string") {
+        consume(state);
+        return { tag: "list_symbols", kind: kindTerm.value };
+      }
+      return { tag: "list_symbols" };
+    }
+
+    case "get_symbol_body": {
+      // (get_symbol_body <symbol>)
+      const symbol = parseTerm(state);
+      if (!symbol) return null;
+      return { tag: "get_symbol_body", symbol };
+    }
+
+    case "find_references": {
+      // (find_references "name")
+      const nameTerm = parseTerm(state);
+      if (!nameTerm || nameTerm.tag !== "lit" || typeof nameTerm.value !== "string") {
+        return null;
+      }
+      return { tag: "find_references", name: nameTerm.value };
+    }
+
     default:
       // Function application or variable
       const fn: LCTerm = { tag: "var", name: op };

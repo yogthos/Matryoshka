@@ -629,6 +629,74 @@ function evaluate(
       return Boolean(str);
     }
 
+    // ==========================
+    // SYMBOL OPERATIONS - Tree-sitter AST queries
+    // ==========================
+
+    case "list_symbols": {
+      // Get SessionDB from bindings
+      const db = bindings.get("_sessionDB") as import("../persistence/session-db.js").SessionDB | undefined;
+      if (!db) {
+        throw new Error("list_symbols: No symbol database available. Load a code file first.");
+      }
+
+      if (term.kind) {
+        log(`[Solver] Listing symbols of kind: ${term.kind}`);
+        const symbols = db.getSymbolsByKind(term.kind as import("../treesitter/types.js").SymbolKind);
+        log(`[Solver] Found ${symbols.length} ${term.kind} symbols`);
+        return symbols;
+      } else {
+        log(`[Solver] Listing all symbols`);
+        const symbols = db.getAllSymbols();
+        log(`[Solver] Found ${symbols.length} total symbols`);
+        return symbols;
+      }
+    }
+
+    case "get_symbol_body": {
+      // Get SessionDB from bindings
+      const db = bindings.get("_sessionDB") as import("../persistence/session-db.js").SessionDB | undefined;
+      if (!db) {
+        throw new Error("get_symbol_body: No symbol database available. Load a code file first.");
+      }
+
+      const symbolRef = evaluate(term.symbol, tools, bindings, log);
+      let symbol: import("../treesitter/types.js").Symbol | null = null;
+
+      // Handle different input types
+      if (typeof symbolRef === "string") {
+        // Lookup symbol by name
+        log(`[Solver] Looking up symbol by name: ${symbolRef}`);
+        symbol = db.findSymbolByName(symbolRef);
+      } else if (typeof symbolRef === "object" && symbolRef !== null && "startLine" in symbolRef) {
+        // Already a symbol object
+        symbol = symbolRef as import("../treesitter/types.js").Symbol;
+      }
+
+      if (!symbol) {
+        log(`[Solver] Symbol not found`);
+        return null;
+      }
+
+      // Extract lines from document
+      log(`[Solver] Getting body for symbol ${symbol.name} (lines ${symbol.startLine}-${symbol.endLine})`);
+      const lines = tools.context.split("\n");
+      const body = lines.slice(symbol.startLine - 1, symbol.endLine).join("\n");
+      return body;
+    }
+
+    case "find_references": {
+      // Find all occurrences of the identifier in the document
+      log(`[Solver] Finding references to: ${term.name}`);
+
+      // Use word boundary matching to find whole-word references
+      const pattern = `\\b${term.name}\\b`;
+      const results = tools.grep(pattern);
+
+      log(`[Solver] Found ${results.length} references to "${term.name}"`);
+      return results;
+    }
+
     default:
       throw new Error(`Unknown term tag: ${(term as LCTerm).tag}`);
   }

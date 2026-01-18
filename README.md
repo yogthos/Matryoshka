@@ -294,6 +294,33 @@ The model:
 (text_stats)                  ; Document metadata (length, line count, samples)
 ```
 
+### Symbol Operations (Code Files)
+
+For code files, Lattice uses tree-sitter to extract structural symbols. This enables code-aware queries that understand functions, classes, methods, and other language constructs.
+
+**Supported languages:** TypeScript (.ts, .tsx), JavaScript (.js, .jsx), Python (.py), Go (.go)
+
+```scheme
+(list_symbols)                ; List all symbols (functions, classes, methods, etc.)
+(list_symbols "function")     ; Filter by kind: "function", "class", "method", "interface", "type", "struct"
+(get_symbol_body "myFunc")    ; Get source code body for a symbol by name
+(get_symbol_body RESULTS)     ; Get body for symbol from previous query result
+(find_references "myFunc")    ; Find all references to an identifier
+```
+
+**Example workflow for code analysis:**
+
+```
+1. lattice_load("./src/app.ts")           # Load a code file
+2. lattice_query('(list_symbols)')        # Get all symbols → $res1
+3. lattice_query('(list_symbols "function")')  # Just functions → $res2
+4. lattice_expand("$res2", limit=5)       # See function names and line numbers
+5. lattice_query('(get_symbol_body "handleRequest")')  # Get function body
+6. lattice_query('(find_references "handleRequest")')  # Find all usages
+```
+
+Symbols include metadata like name, kind, start/end lines, and parent relationships (e.g., methods within classes).
+
 ### Collection Operations
 
 ```scheme
@@ -435,8 +462,14 @@ src/
 │   ├── handle-ops.ts   # Server-side operations
 │   ├── fts5-search.ts  # Full-text search
 │   └── checkpoint.ts   # Session persistence
+├── treesitter/         # Code-aware symbol extraction
+│   ├── parser-registry.ts  # Tree-sitter parser management
+│   ├── symbol-extractor.ts # AST → symbol extraction
+│   ├── language-map.ts # Extension → language mapping
+│   └── types.ts        # Symbol interfaces
 ├── engine/             # Nucleus execution engine
-│   └── nucleus-engine.ts
+│   ├── nucleus-engine.ts
+│   └── handle-session.ts   # Session with symbol support
 ├── minikanren/         # Relational programming engine
 ├── synthesis/          # Program synthesis (Barliman-style)
 │   └── evalo/          # Extractor DSL
@@ -451,6 +484,7 @@ This project incorporates ideas and code from:
 - **[Nucleus](https://github.com/michaelwhitford/nucleus)** - A symbolic S-expression language by Michael Whitford. RLM uses Nucleus syntax for the constrained DSL that the LLM outputs, providing a rigid grammar that reduces model errors.
 - **[ramo](https://github.com/wjlewis/ramo)** - A miniKanren implementation in TypeScript by Will Lewis. Used for constraint-based program synthesis.
 - **[Barliman](https://github.com/webyrd/Barliman)** - A prototype smart editor by William Byrd and Greg Rosenblatt that uses program synthesis to assist programmers. The Barliman-style approach of providing input/output constraints instead of code inspired the synthesis workflow.
+- **[tree-sitter](https://tree-sitter.github.io/tree-sitter/)** - A parser generator tool and incremental parsing library. Used for extracting structural symbols (functions, classes, methods) from code files to enable code-aware queries.
 
 ## License
 

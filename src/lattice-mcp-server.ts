@@ -145,6 +145,12 @@ SEARCH (returns handle to matches):
   (fuzzy_search "query" 10)     Fuzzy search - top N matches by relevance
   (lines 10 20)                 Get specific line range
 
+SYMBOL OPERATIONS (code files: .ts, .js, .py, .go):
+  (list_symbols)                List all symbols (functions, classes, methods, etc.)
+  (list_symbols "function")     Filter by kind: "function", "class", "method", "interface", "type"
+  (get_symbol_body "funcName")  Get source code for a symbol
+  (find_references "identifier") Find all references to an identifier
+
 AGGREGATE (returns scalar directly):
   (count RESULTS)               Count items in current results
   (sum RESULTS)                 Sum numeric values (auto-extracts from $1,234 format)
@@ -161,6 +167,11 @@ EXAMPLE WORKFLOW:
 2. (filter RESULTS (lambda x ...))   → Returns: $res2: Array(50) [preview]
 3. (count RESULTS)                   → Returns: 50
 4. lattice_expand $res2 limit=10     → See 10 actual error messages
+
+SYMBOL WORKFLOW:
+1. (list_symbols "function")         → Returns: $res1: Array(15) [preview]
+2. (get_symbol_body "myFunction")    → Returns source code directly
+3. (find_references "myFunction")    → Returns: $res2: Array(8) [references]
 
 VARIABLE BINDING:
 - RESULTS: Always points to the last array result (use in queries)

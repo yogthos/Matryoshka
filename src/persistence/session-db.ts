@@ -5,9 +5,11 @@
  * - FTS5 full-text search for document lines
  * - Handle storage for result sets
  * - Checkpoint persistence for session resume
+ * - Symbol storage for tree-sitter extracted symbols
  */
 
 import Database from "better-sqlite3";
+import type { Symbol, SymbolKind } from "../treesitter/types.js";
 
 export interface DocumentLine {
   lineNum: number;
@@ -84,6 +86,24 @@ export class SessionDB {
         bindings TEXT NOT NULL,
         timestamp INTEGER NOT NULL
       );
+
+      -- Symbols table for tree-sitter extracted symbols
+      CREATE TABLE IF NOT EXISTS symbols (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        startLine INTEGER NOT NULL,
+        endLine INTEGER NOT NULL,
+        startCol INTEGER,
+        endCol INTEGER,
+        signature TEXT,
+        parentSymbolId INTEGER NULL,
+        FOREIGN KEY (parentSymbolId) REFERENCES symbols(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+      CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
+      CREATE INDEX IF NOT EXISTS idx_symbols_lines ON symbols(startLine, endLine);
     `);
   }
 
@@ -317,6 +337,106 @@ export class SessionDB {
     this.db.exec("DELETE FROM checkpoints");
   }
 
+  // ========================================
+  // Symbol operations
+  // ========================================
+
+  /**
+   * Store a symbol in the database
+   * @returns The ID of the inserted symbol
+   */
+  storeSymbol(symbol: Omit<Symbol, "id">): number {
+    if (!this.db) throw new Error("Database not open");
+
+    const stmt = this.db.prepare(`
+      INSERT INTO symbols (name, kind, startLine, endLine, startCol, endCol, signature, parentSymbolId)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const result = stmt.run(
+      symbol.name,
+      symbol.kind,
+      symbol.startLine,
+      symbol.endLine,
+      symbol.startCol ?? null,
+      symbol.endCol ?? null,
+      symbol.signature ?? null,
+      symbol.parentSymbolId ?? null
+    );
+
+    return result.lastInsertRowid as number;
+  }
+
+  /**
+   * Get a symbol by ID
+   */
+  getSymbol(id: number): Symbol | null {
+    if (!this.db) return null;
+    const stmt = this.db.prepare(`
+      SELECT id, name, kind, startLine, endLine, startCol, endCol, signature, parentSymbolId
+      FROM symbols WHERE id = ?
+    `);
+    const row = stmt.get(id) as Symbol | undefined;
+    return row ?? null;
+  }
+
+  /**
+   * Get all symbols
+   */
+  getAllSymbols(): Symbol[] {
+    if (!this.db) return [];
+    const stmt = this.db.prepare(`
+      SELECT id, name, kind, startLine, endLine, startCol, endCol, signature, parentSymbolId
+      FROM symbols ORDER BY startLine, startCol
+    `);
+    return stmt.all() as Symbol[];
+  }
+
+  /**
+   * Get symbols filtered by kind
+   */
+  getSymbolsByKind(kind: SymbolKind): Symbol[] {
+    if (!this.db) return [];
+    const stmt = this.db.prepare(`
+      SELECT id, name, kind, startLine, endLine, startCol, endCol, signature, parentSymbolId
+      FROM symbols WHERE kind = ? ORDER BY startLine, startCol
+    `);
+    return stmt.all(kind) as Symbol[];
+  }
+
+  /**
+   * Get all symbols that contain a specific line
+   */
+  getSymbolsAtLine(line: number): Symbol[] {
+    if (!this.db) return [];
+    const stmt = this.db.prepare(`
+      SELECT id, name, kind, startLine, endLine, startCol, endCol, signature, parentSymbolId
+      FROM symbols WHERE startLine <= ? AND endLine >= ? ORDER BY startLine, startCol
+    `);
+    return stmt.all(line, line) as Symbol[];
+  }
+
+  /**
+   * Find a symbol by name (returns first match)
+   */
+  findSymbolByName(name: string): Symbol | null {
+    if (!this.db) return null;
+    const stmt = this.db.prepare(`
+      SELECT id, name, kind, startLine, endLine, startCol, endCol, signature, parentSymbolId
+      FROM symbols WHERE name = ? LIMIT 1
+    `);
+    const row = stmt.get(name) as Symbol | undefined;
+    return row ?? null;
+  }
+
+  /**
+   * Clear all symbols
+   */
+  clearSymbols(): void {
+    if (!this.db) return;
+    this.db.exec("DELETE FROM symbols");
+  }
+
   /**
    * Clear all data (but keep schema)
    */
@@ -326,6 +446,7 @@ export class SessionDB {
       DELETE FROM document_lines;
       DELETE FROM handles;
       DELETE FROM checkpoints;
+      DELETE FROM symbols;
     `);
     this.handleCounter = 0;
   }
