@@ -1,4 +1,4 @@
-# Recursive Language Model (RLM)
+# Matryoshka
 
 [![Tests](https://github.com/yogthos/Matryoshka/actions/workflows/test.yml/badge.svg)](https://github.com/yogthos/Matryoshka/actions/workflows/test.yml)
 
