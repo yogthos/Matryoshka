@@ -6,10 +6,14 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { NucleusEngine } from "./nucleus-engine.js";
 import { SessionDB } from "../persistence/session-db.js";
 import { HandleRegistry } from "../persistence/handle-registry.js";
 import { HandleOps } from "../persistence/handle-ops.js";
+import { ParserRegistry } from "../treesitter/parser-registry.js";
+import { SymbolExtractor } from "../treesitter/symbol-extractor.js";
+import { isExtensionSupported } from "../treesitter/language-map.js";
 
 /**
  * Result of a handle-based query execution
@@ -62,6 +66,9 @@ export class HandleSession {
   private db: SessionDB;
   private registry: HandleRegistry;
   private ops: HandleOps;
+  private parserRegistry: ParserRegistry;
+  private symbolExtractor: SymbolExtractor;
+  private parserInitialized: boolean = false;
   private documentPath: string = "";
   private documentSize: number = 0;
   private loadedAt: Date | null = null;
@@ -73,18 +80,34 @@ export class HandleSession {
     this.db = new SessionDB();
     this.registry = new HandleRegistry(this.db);
     this.ops = new HandleOps(this.db, this.registry);
+    this.parserRegistry = new ParserRegistry();
+    this.symbolExtractor = new SymbolExtractor(this.parserRegistry);
+  }
+
+  /**
+   * Initialize the parser registry (call before loading code files)
+   * This is called automatically by loadContent but can be called early
+   * to avoid initialization delay on first code file load.
+   */
+  async init(): Promise<void> {
+    if (!this.parserInitialized) {
+      await this.parserRegistry.init();
+      this.parserInitialized = true;
+    }
   }
 
   /**
    * Load a document from file
+   * Automatically extracts symbols for supported code files
    */
   async loadFile(filePath: string): Promise<{ lineCount: number; size: number }> {
     const content = await readFile(filePath, "utf-8");
-    return this.loadContent(content, filePath);
+    return this.loadContentWithSymbols(content, filePath);
   }
 
   /**
    * Load a document from string content
+   * Automatically extracts symbols for supported code files
    */
   loadContent(content: string, path: string = "<string>"): { lineCount: number; size: number } {
     // Load into NucleusEngine for query execution
@@ -93,6 +116,18 @@ export class HandleSession {
     // Also load into SessionDB for FTS5 search and handle storage
     const lineCount = this.db.loadDocument(content);
 
+    // Clear any existing symbols before loading new content
+    this.db.clearSymbols();
+
+    // Extract symbols for code files (async, but we fire and forget for sync API)
+    const ext = extname(path);
+    if (ext && isExtensionSupported(ext)) {
+      this.extractSymbolsAsync(content, ext);
+    }
+
+    // Set SessionDB binding for solver access
+    this.engine.setBinding("_sessionDB", this.db);
+
     this.documentPath = path;
     this.documentSize = content.length;
     this.loadedAt = new Date();
@@ -100,6 +135,60 @@ export class HandleSession {
     this.queryCount = 0;
 
     return { lineCount, size: content.length };
+  }
+
+  /**
+   * Load a document and wait for symbol extraction to complete
+   * Use this when you need to query symbols immediately after loading
+   */
+  async loadContentWithSymbols(content: string, path: string = "<string>"): Promise<{ lineCount: number; size: number }> {
+    // Load into NucleusEngine for query execution
+    this.engine.loadContent(content);
+
+    // Also load into SessionDB for FTS5 search and handle storage
+    const lineCount = this.db.loadDocument(content);
+
+    // Clear any existing symbols before loading new content
+    this.db.clearSymbols();
+
+    // Extract symbols for code files
+    const ext = extname(path);
+    if (ext && isExtensionSupported(ext)) {
+      await this.init();
+      await this.extractAndStoreSymbols(content, ext);
+    }
+
+    // Set SessionDB binding for solver access
+    this.engine.setBinding("_sessionDB", this.db);
+
+    this.documentPath = path;
+    this.documentSize = content.length;
+    this.loadedAt = new Date();
+    this.lastAccessedAt = new Date();
+    this.queryCount = 0;
+
+    return { lineCount, size: content.length };
+  }
+
+  /**
+   * Extract and store symbols (async, fire-and-forget for sync load)
+   */
+  private extractSymbolsAsync(content: string, ext: string): void {
+    this.init()
+      .then(() => this.extractAndStoreSymbols(content, ext))
+      .catch(() => {
+        // Silently ignore errors - symbols just won't be available
+      });
+  }
+
+  /**
+   * Extract symbols and store them in the database
+   */
+  private async extractAndStoreSymbols(content: string, ext: string): Promise<void> {
+    const symbols = await this.symbolExtractor.extractSymbols(content, ext);
+    for (const symbol of symbols) {
+      this.db.storeSymbol(symbol);
+    }
   }
 
   /**
@@ -313,6 +402,7 @@ export class HandleSession {
    * Close the session and free resources
    */
   close(): void {
+    this.parserRegistry.dispose();
     this.db.close();
   }
 

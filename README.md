@@ -294,6 +294,135 @@ The model:
 (text_stats)                  ; Document metadata (length, line count, samples)
 ```
 
+### Symbol Operations (Code Files)
+
+For code files, Lattice uses tree-sitter to extract structural symbols. This enables code-aware queries that understand functions, classes, methods, and other language constructs.
+
+**Built-in languages (packages included):**
+- TypeScript (.ts, .tsx), JavaScript (.js, .jsx), Python (.py), Go (.go)
+- HTML (.html), CSS (.css), JSON (.json)
+
+**Additional languages (install package to enable):**
+- Rust, C, C++, Java, Ruby, PHP, C#, Kotlin, Swift, Scala, Lua, Haskell, Bash, SQL, and more
+
+```scheme
+(list_symbols)                ; List all symbols (functions, classes, methods, etc.)
+(list_symbols "function")     ; Filter by kind: "function", "class", "method", "interface", "type", "struct"
+(get_symbol_body "myFunc")    ; Get source code body for a symbol by name
+(get_symbol_body RESULTS)     ; Get body for symbol from previous query result
+(find_references "myFunc")    ; Find all references to an identifier
+```
+
+**Example workflow for code analysis:**
+
+```
+1. lattice_load("./src/app.ts")           # Load a code file
+2. lattice_query('(list_symbols)')        # Get all symbols → $res1
+3. lattice_query('(list_symbols "function")')  # Just functions → $res2
+4. lattice_expand("$res2", limit=5)       # See function names and line numbers
+5. lattice_query('(get_symbol_body "handleRequest")')  # Get function body
+6. lattice_query('(find_references "handleRequest")')  # Find all usages
+```
+
+Symbols include metadata like name, kind, start/end lines, and parent relationships (e.g., methods within classes).
+
+#### Adding Language Support
+
+Matryoshka includes built-in symbol mappings for 20+ languages. To enable a language, install its tree-sitter grammar package:
+
+```bash
+# Enable Rust support
+npm install tree-sitter-rust
+
+# Enable Java support
+npm install tree-sitter-java
+
+# Enable Ruby support
+npm install tree-sitter-ruby
+```
+
+**Languages with built-in mappings:**
+- TypeScript, JavaScript, Python, Go, Rust, C, C++, Java
+- Ruby, PHP, C#, Kotlin, Swift, Scala, Lua, Haskell, Elixir
+- HTML, CSS, JSON, YAML, TOML, Markdown, SQL, Bash
+
+Once a package is installed, the language is automatically available for symbol extraction.
+
+#### Custom Language Configuration
+
+For languages without built-in mappings, or to override existing mappings, create a config file at `~/.matryoshka/config.json`:
+
+```json
+{
+  "grammars": {
+    "mylang": {
+      "package": "tree-sitter-mylang",
+      "extensions": [".ml", ".mli"],
+      "moduleExport": "mylang",
+      "symbols": {
+        "function_definition": "function",
+        "method_definition": "method",
+        "class_definition": "class",
+        "module_definition": "module"
+      }
+    }
+  }
+}
+```
+
+**Configuration fields:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `package` | Yes | npm package name for the tree-sitter grammar |
+| `extensions` | Yes | File extensions to associate with this language |
+| `symbols` | Yes | Maps tree-sitter node types to symbol kinds |
+| `moduleExport` | No | Submodule export name (e.g., `"typescript"` for tree-sitter-typescript) |
+
+**Symbol kinds:** `function`, `method`, `class`, `interface`, `type`, `struct`, `enum`, `trait`, `module`, `variable`, `constant`, `property`
+
+#### Finding Tree-sitter Node Types
+
+To configure symbol mappings for a new language, you need to know the tree-sitter node types. You can explore them using the tree-sitter CLI:
+
+```bash
+# Install tree-sitter CLI
+npm install -g tree-sitter-cli
+
+# Parse a sample file and see the AST
+tree-sitter parse sample.mylang
+```
+
+Or use the [tree-sitter playground](https://tree-sitter.github.io/tree-sitter/playground) to explore node types interactively.
+
+**Example: Adding OCaml support**
+
+1. Find the grammar package: `tree-sitter-ocaml`
+2. Install it: `npm install tree-sitter-ocaml`
+3. Explore the AST to find node types for functions, modules, etc.
+4. Add to `~/.matryoshka/config.json`:
+
+```json
+{
+  "grammars": {
+    "ocaml": {
+      "package": "tree-sitter-ocaml",
+      "extensions": [".ml", ".mli"],
+      "moduleExport": "ocaml",
+      "symbols": {
+        "value_definition": "function",
+        "let_binding": "variable",
+        "type_definition": "type",
+        "module_definition": "module",
+        "module_type_definition": "interface"
+      }
+    }
+  }
+}
+```
+
+**Note:** Some tree-sitter packages use native Node.js bindings that may not compile on all systems. If installation fails, check if the package supports your Node.js version or look for WASM alternatives.
+
 ### Collection Operations
 
 ```scheme
@@ -435,8 +564,14 @@ src/
 │   ├── handle-ops.ts   # Server-side operations
 │   ├── fts5-search.ts  # Full-text search
 │   └── checkpoint.ts   # Session persistence
+├── treesitter/         # Code-aware symbol extraction
+│   ├── parser-registry.ts  # Tree-sitter parser management
+│   ├── symbol-extractor.ts # AST → symbol extraction
+│   ├── language-map.ts # Extension → language mapping
+│   └── types.ts        # Symbol interfaces
 ├── engine/             # Nucleus execution engine
-│   └── nucleus-engine.ts
+│   ├── nucleus-engine.ts
+│   └── handle-session.ts   # Session with symbol support
 ├── minikanren/         # Relational programming engine
 ├── synthesis/          # Program synthesis (Barliman-style)
 │   └── evalo/          # Extractor DSL
@@ -451,6 +586,7 @@ This project incorporates ideas and code from:
 - **[Nucleus](https://github.com/michaelwhitford/nucleus)** - A symbolic S-expression language by Michael Whitford. RLM uses Nucleus syntax for the constrained DSL that the LLM outputs, providing a rigid grammar that reduces model errors.
 - **[ramo](https://github.com/wjlewis/ramo)** - A miniKanren implementation in TypeScript by Will Lewis. Used for constraint-based program synthesis.
 - **[Barliman](https://github.com/webyrd/Barliman)** - A prototype smart editor by William Byrd and Greg Rosenblatt that uses program synthesis to assist programmers. The Barliman-style approach of providing input/output constraints instead of code inspired the synthesis workflow.
+- **[tree-sitter](https://tree-sitter.github.io/tree-sitter/)** - A parser generator tool and incremental parsing library. Used for extracting structural symbols (functions, classes, methods) from code files to enable code-aware queries.
 
 ## License
 

@@ -343,9 +343,16 @@ Nucleus Command Reference
 
 SEARCH OPERATIONS (impure - access document):
   (grep "pattern")              Search for regex pattern, returns matches
-  (fuzzy_search "query" limit)  Fuzzy search, returns top matches by score
+  (fuzzy_search "query" limit)  Fuzzy search, returns top matches by relevance
   (text_stats)                  Get document statistics
   (lines start end)             Get lines in range (1-indexed)
+
+SYMBOL OPERATIONS (code files only - requires tree-sitter):
+  (list_symbols)                List all symbols (functions, classes, methods, etc.)
+  (list_symbols "kind")         Filter by kind: "function", "class", "method", "interface", "type", "struct"
+  (get_symbol_body "name")      Get source code body for a symbol by name
+  (get_symbol_body RESULTS)     Get source code body for symbol from previous query
+  (find_references "name")      Find all references to an identifier
 
 COLLECTION OPERATIONS (pure - work on RESULTS):
   (filter RESULTS pred)         Keep items matching predicate
@@ -382,6 +389,9 @@ VARIABLES (for use in queries):
 
 NOTE: $res1, $res2, etc. are handle stubs for lattice_expand only.
       Use RESULTS or _1, _2, _3 to reference previous results in queries.
+
+SUPPORTED LANGUAGES FOR SYMBOLS:
+  TypeScript (.ts, .tsx), JavaScript (.js, .jsx), Python (.py), Go (.go)
 `;
   }
 }
