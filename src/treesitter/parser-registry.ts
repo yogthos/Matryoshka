@@ -3,23 +3,20 @@
  *
  * Handles initialization and lazy-loading of language grammars.
  * Uses native Node.js tree-sitter bindings for optimal performance.
+ * Supports both built-in and custom grammars from config.
  */
 
 import type { SupportedLanguage } from "./types.js";
-import { getLanguageForExtension, getSupportedExtensions } from "./language-map.js";
+import {
+  getLanguageForExtension,
+  getSupportedExtensions,
+  getLanguageConfig,
+  isLanguageAvailable,
+  getAvailableLanguages,
+} from "./language-map.js";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Parser = require("tree-sitter");
-
-/**
- * Language grammar modules (lazy-loaded)
- */
-const GRAMMAR_MODULES: Record<SupportedLanguage, string> = {
-  typescript: "tree-sitter-typescript",
-  javascript: "tree-sitter-javascript",
-  python: "tree-sitter-python",
-  go: "tree-sitter-go",
-};
 
 // Tree-sitter types (using any for dynamic loading)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -34,7 +31,7 @@ type TreeSitterTree = any;
  */
 export class ParserRegistry {
   private parser: TreeSitterParser | null = null;
-  private languages: Map<SupportedLanguage, TreeSitterLanguage> = new Map();
+  private languages: Map<string, TreeSitterLanguage> = new Map();
   private initialized: boolean = false;
 
   /**
@@ -62,26 +59,57 @@ export class ParserRegistry {
   }
 
   /**
+   * Get available languages (with packages installed)
+   */
+  getAvailableLanguages(): string[] {
+    return getAvailableLanguages();
+  }
+
+  /**
+   * Check if a language is available
+   */
+  isLanguageAvailable(language: string): boolean {
+    return isLanguageAvailable(language);
+  }
+
+  /**
    * Load a language grammar (lazy-loaded on first use)
    */
-  private loadLanguage(language: SupportedLanguage): TreeSitterLanguage {
+  private loadLanguage(language: string): TreeSitterLanguage {
     // Return cached language if available
     const cached = this.languages.get(language);
     if (cached) return cached;
 
-    // Load the grammar module
-    const moduleName = GRAMMAR_MODULES[language];
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const grammarModule = require(moduleName);
+    // Get language config
+    const config = getLanguageConfig(language);
+    if (!config) {
+      throw new Error(`Unknown language: ${language}`);
+    }
 
-    // TypeScript module exports both typescript and tsx
-    // JavaScript module exports both javascript and jsx
+    // Load the grammar module
+    let grammarModule;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      grammarModule = require(config.package);
+    } catch (err) {
+      throw new Error(
+        `Grammar package '${config.package}' not installed. ` +
+          `Run: npm install ${config.package}`
+      );
+    }
+
+    // Extract the grammar (some modules export multiple languages)
     let lang: TreeSitterLanguage;
-    if (language === "typescript") {
-      lang = grammarModule.typescript;
-    } else if (language === "javascript") {
-      lang = grammarModule;
+    if (config.moduleExport) {
+      // Use specific export (e.g., "typescript" from tree-sitter-typescript)
+      lang = grammarModule[config.moduleExport];
+      if (!lang) {
+        throw new Error(
+          `Module '${config.package}' does not export '${config.moduleExport}'`
+        );
+      }
     } else {
+      // Use default export
       lang = grammarModule;
     }
 
@@ -108,6 +136,15 @@ export class ParserRegistry {
       throw new Error(`Unsupported extension: ${ext}`);
     }
 
+    // Check if package is installed
+    if (!isLanguageAvailable(language)) {
+      const config = getLanguageConfig(language);
+      throw new Error(
+        `Grammar for '${language}' not available. ` +
+          `Run: npm install ${config?.package ?? `tree-sitter-${language}`}`
+      );
+    }
+
     // Load the language grammar
     const lang = this.loadLanguage(language);
 
@@ -128,6 +165,11 @@ export class ParserRegistry {
       return null;
     }
 
+    // Check if package is available
+    if (!isLanguageAvailable(language)) {
+      return null;
+    }
+
     const tree = await this.parseDocument(content, ext);
     if (!tree) return null;
 
@@ -137,14 +179,14 @@ export class ParserRegistry {
   /**
    * Check if a language is loaded
    */
-  isLanguageLoaded(language: SupportedLanguage): boolean {
+  isLanguageLoaded(language: string): boolean {
     return this.languages.has(language);
   }
 
   /**
    * Get list of currently loaded languages
    */
-  getLoadedLanguages(): SupportedLanguage[] {
+  getLoadedLanguages(): string[] {
     return [...this.languages.keys()];
   }
 

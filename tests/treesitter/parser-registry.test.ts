@@ -4,6 +4,7 @@ import {
   getLanguageForExtension,
   getSupportedExtensions,
   isExtensionSupported,
+  isLanguageAvailable,
 } from "../../src/treesitter/language-map.js";
 
 describe("Language Map", () => {
@@ -28,10 +29,19 @@ describe("Language Map", () => {
     expect(getLanguageForExtension(".go")).toBe("go");
   });
 
-  it("should return null for unsupported extensions", () => {
-    expect(getLanguageForExtension(".rs")).toBeNull();
-    expect(getLanguageForExtension(".java")).toBeNull();
+  it("should return null for unknown extensions", () => {
+    // Extensions with no built-in config
     expect(getLanguageForExtension(".txt")).toBeNull();
+    expect(getLanguageForExtension(".xyz")).toBeNull();
+    expect(getLanguageForExtension(".unknown")).toBeNull();
+  });
+
+  it("should return language for extensions with built-in configs", () => {
+    // These have configs but packages may not be installed
+    expect(getLanguageForExtension(".rs")).toBe("rust");
+    expect(getLanguageForExtension(".java")).toBe("java");
+    expect(getLanguageForExtension(".html")).toBe("html");
+    expect(getLanguageForExtension(".json")).toBe("json");
   });
 
   it("should be case-insensitive for extensions", () => {
@@ -49,8 +59,22 @@ describe("Language Map", () => {
   });
 
   it("should check extension support", () => {
+    // isExtensionSupported returns true if a config exists (not if package is installed)
     expect(isExtensionSupported(".ts")).toBe(true);
-    expect(isExtensionSupported(".java")).toBe(false);
+    expect(isExtensionSupported(".java")).toBe(true); // Has built-in config
+    expect(isExtensionSupported(".txt")).toBe(false); // No config
+    expect(isExtensionSupported(".xyz")).toBe(false); // No config
+  });
+
+  it("should check language availability (package installed)", () => {
+    // These packages are installed
+    expect(isLanguageAvailable("typescript")).toBe(true);
+    expect(isLanguageAvailable("python")).toBe(true);
+    expect(isLanguageAvailable("go")).toBe(true);
+    expect(isLanguageAvailable("javascript")).toBe(true);
+    // These have configs but packages aren't installed
+    expect(isLanguageAvailable("rust")).toBe(false);
+    expect(isLanguageAvailable("java")).toBe(false);
   });
 });
 
@@ -219,9 +243,17 @@ function incomplete(
       expect(tree!.rootNode).toBeDefined();
     });
 
-    it("should throw for unsupported extension", async () => {
-      const code = "some rust code";
+    it("should throw for unavailable language (package not installed)", async () => {
+      const code = "fn main() {}";
+      // Rust has a config but package isn't installed
       await expect(registry.parseDocument(code, ".rs")).rejects.toThrow(
+        /not available/
+      );
+    });
+
+    it("should throw for unknown extension", async () => {
+      const code = "some content";
+      await expect(registry.parseDocument(code, ".xyz")).rejects.toThrow(
         /Unsupported extension/
       );
     });

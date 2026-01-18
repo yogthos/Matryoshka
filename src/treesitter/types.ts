@@ -53,18 +53,28 @@ export interface ExtractionResult {
 }
 
 /**
- * Supported programming languages
+ * Built-in language identifiers (for type safety with original languages)
+ * Additional languages can be loaded dynamically via config
  */
-export type SupportedLanguage = "typescript" | "javascript" | "python" | "go";
+export type BuiltinLanguage = "typescript" | "javascript" | "python" | "go";
+
+/**
+ * Supported language - can be a built-in or dynamically loaded language
+ */
+export type SupportedLanguage = string;
 
 /**
  * Language configuration for parsing
  */
 export interface LanguageConfig {
   /** Language identifier */
-  language: SupportedLanguage;
+  language: string;
   /** File extensions for this language */
   extensions: string[];
-  /** WASM grammar file name */
-  wasmFile: string;
+  /** npm package name */
+  package: string;
+  /** Optional: how to extract grammar from module */
+  moduleExport?: string;
+  /** AST node type to symbol kind mapping */
+  symbols: Record<string, SymbolKind>;
 }

@@ -298,7 +298,12 @@ The model:
 
 For code files, Lattice uses tree-sitter to extract structural symbols. This enables code-aware queries that understand functions, classes, methods, and other language constructs.
 
-**Supported languages:** TypeScript (.ts, .tsx), JavaScript (.js, .jsx), Python (.py), Go (.go)
+**Built-in languages (packages included):**
+- TypeScript (.ts, .tsx), JavaScript (.js, .jsx), Python (.py), Go (.go)
+- HTML (.html), CSS (.css), JSON (.json)
+
+**Additional languages (install package to enable):**
+- Rust, C, C++, Java, Ruby, PHP, C#, Kotlin, Swift, Scala, Lua, Haskell, Bash, SQL, and more
 
 ```scheme
 (list_symbols)                ; List all symbols (functions, classes, methods, etc.)
@@ -320,6 +325,34 @@ For code files, Lattice uses tree-sitter to extract structural symbols. This ena
 ```
 
 Symbols include metadata like name, kind, start/end lines, and parent relationships (e.g., methods within classes).
+
+#### Adding Language Support
+
+To enable symbol extraction for additional languages, install the tree-sitter grammar package:
+
+```bash
+# Example: Add Rust support
+npm install tree-sitter-rust
+```
+
+Matryoshka includes built-in symbol mappings for 20+ popular languages. Once the package is installed, the language is automatically available.
+
+For custom languages or to override built-in mappings, add configuration to `~/.matryoshka/config.json`:
+
+```json
+{
+  "grammars": {
+    "mylang": {
+      "package": "tree-sitter-mylang",
+      "extensions": [".ml"],
+      "symbols": {
+        "function_definition": "function",
+        "class_definition": "class"
+      }
+    }
+  }
+}
+```
 
 ### Collection Operations
 

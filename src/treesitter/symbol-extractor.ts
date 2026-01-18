@@ -3,64 +3,75 @@
  *
  * Walks the syntax tree and identifies functions, classes, methods,
  * interfaces, types, and other symbol definitions.
+ * Supports both built-in and custom language configurations.
  */
 
 import { ParserRegistry } from "./parser-registry.js";
 import type { Symbol, SymbolKind, SupportedLanguage } from "./types.js";
-
-/**
- * Node types that represent symbol definitions in each language
- */
-const SYMBOL_NODE_TYPES: Record<SupportedLanguage, Record<string, SymbolKind>> = {
-  typescript: {
-    function_declaration: "function",
-    method_definition: "method",
-    class_declaration: "class",
-    interface_declaration: "interface",
-    type_alias_declaration: "type",
-    enum_declaration: "enum",
-    variable_declarator: "variable",
-    lexical_declaration: "variable",
-    public_field_definition: "property",
-  },
-  javascript: {
-    function_declaration: "function",
-    method_definition: "method",
-    class_declaration: "class",
-    variable_declarator: "variable",
-    lexical_declaration: "variable",
-    field_definition: "property",
-  },
-  python: {
-    function_definition: "function",
-    class_definition: "class",
-    // Methods are also function_definition but inside classes
-  },
-  go: {
-    function_declaration: "function",
-    method_declaration: "method",
-    // type_declaration is handled separately (contains type_spec with struct_type)
-  },
-};
+import { getSymbolMappings } from "./language-map.js";
 
 /**
  * Name field mappings for different node types
  */
 const NAME_FIELDS: Record<string, string[]> = {
+  // Functions
   function_declaration: ["name"],
   function_definition: ["name"],
+  function_item: ["name"],
   method_definition: ["name"],
   method_declaration: ["name"],
+  // Classes/types
   class_declaration: ["name"],
   class_definition: ["name"],
+  class_specifier: ["name"],
   interface_declaration: ["name"],
   type_alias_declaration: ["name"],
   type_spec: ["name"],
+  type_definition: ["name"],
+  type_item: ["name"],
+  struct_item: ["name"],
+  struct_specifier: ["name"],
   enum_declaration: ["name"],
+  enum_item: ["name"],
+  enum_specifier: ["name"],
+  trait_item: ["name"],
+  impl_item: ["name", "trait", "type"],
+  // Variables
   variable_declarator: ["name"],
+  const_item: ["name"],
+  static_item: ["name"],
+  // Properties
   public_field_definition: ["name"],
   field_definition: ["name"],
+  property_declaration: ["name"],
+  // Modules
+  mod_item: ["name"],
+  namespace_definition: ["name"],
+  module: ["name"],
+  // SQL
+  create_table_statement: ["name", "table_name"],
+  create_function_statement: ["name", "function_name"],
+  // Generic fallback
+  pair: ["key"],
+  block_mapping_pair: ["key"],
 };
+
+/**
+ * Node types that are containers (can have child symbols)
+ */
+const CONTAINER_TYPES = new Set([
+  "class_declaration",
+  "class_definition",
+  "class_specifier",
+  "interface_declaration",
+  "type_spec",
+  "impl_item",
+  "trait_item",
+  "struct_item",
+  "module",
+  "mod_item",
+  "namespace_definition",
+]);
 
 /**
  * SymbolExtractor extracts symbols from source code
@@ -86,8 +97,15 @@ export class SymbolExtractor {
     const symbols: Symbol[] = [];
     this.symbolIdCounter = 0;
 
+    // Get symbol mappings for this language
+    const symbolMappings = getSymbolMappings(language);
+    if (!symbolMappings) {
+      // No symbol mappings - return empty
+      return [];
+    }
+
     // Walk the tree and extract symbols
-    this.walkTree(tree.rootNode, language, symbols, null);
+    this.walkTree(tree.rootNode, language, symbolMappings, symbols, null);
 
     return symbols;
   }
@@ -99,37 +117,45 @@ export class SymbolExtractor {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     node: any,
     language: SupportedLanguage,
+    symbolMappings: Record<string, SymbolKind>,
     symbols: Symbol[],
     parentId: number | null
   ): void {
-    const nodeTypes = SYMBOL_NODE_TYPES[language];
     let currentParentId = parentId;
 
-    // Check if this node is a symbol definition
-    if (nodeTypes[node.type]) {
-      const symbol = this.extractSymbolFromNode(node, language, parentId);
-      if (symbol) {
-        symbols.push(symbol);
-        // If this is a container (class, struct), use its ID for children
-        if (this.isContainer(node.type)) {
+    // Special case: Python - handle classes and methods correctly
+    if (language === "python") {
+      if (node.type === "class_definition") {
+        const symbol = this.extractSymbolFromNode(node, "class", parentId, language);
+        if (symbol) {
+          symbols.push(symbol);
           currentParentId = symbol.id!;
         }
-      }
-    } else if (language === "python" && node.type === "function_definition") {
-      // Python: check if this is a method (inside a class)
-      const symbol = this.extractSymbolFromNode(node, language, parentId);
-      if (symbol) {
-        // If parent is a class, this is a method
-        if (parentId !== null) {
-          symbol.kind = "method";
+      } else if (node.type === "function_definition") {
+        const pythonKind: SymbolKind = parentId !== null ? "method" : "function";
+        const symbol = this.extractSymbolFromNode(node, pythonKind, parentId, language);
+        if (symbol) {
+          symbols.push(symbol);
         }
-        symbols.push(symbol);
       }
     } else if (language === "go" && node.type === "type_declaration") {
-      // Go: extract type declaration (struct, interface, etc.)
+      // Go: type_declaration contains type_spec
       const symbol = this.extractGoTypeDeclaration(node, parentId);
       if (symbol) {
         symbols.push(symbol);
+      }
+    } else {
+      // Check if this node is a symbol definition using the mappings
+      const kind = symbolMappings[node.type];
+      if (kind) {
+        const symbol = this.extractSymbolFromNode(node, kind, parentId, language);
+        if (symbol) {
+          symbols.push(symbol);
+          // If this is a container, use its ID for children
+          if (CONTAINER_TYPES.has(node.type)) {
+            currentParentId = symbol.id!;
+          }
+        }
       }
     }
 
@@ -137,7 +163,7 @@ export class SymbolExtractor {
     for (let i = 0; i < node.childCount; i++) {
       const child = node.child(i);
       if (child) {
-        this.walkTree(child, language, symbols, currentParentId);
+        this.walkTree(child, language, symbolMappings, symbols, currentParentId);
       }
     }
   }
@@ -148,19 +174,10 @@ export class SymbolExtractor {
   private extractSymbolFromNode(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     node: any,
-    language: SupportedLanguage,
-    parentId: number | null
+    kind: SymbolKind,
+    parentId: number | null,
+    language: SupportedLanguage
   ): Symbol | null {
-    const nodeTypes = SYMBOL_NODE_TYPES[language];
-    let kind = nodeTypes[node.type];
-
-    // Special case for Python function_definition
-    if (language === "python" && node.type === "function_definition") {
-      kind = parentId !== null ? "method" : "function";
-    }
-
-    if (!kind) return null;
-
     const name = this.getNodeName(node);
     if (!name) return null;
 
@@ -200,7 +217,7 @@ export class SymbolExtractor {
     const name = this.getNodeName(typeSpec);
     if (!name) return null;
 
-    // Check if it's a struct
+    // Check if it's a struct or interface
     let kind: SymbolKind = "type";
     for (let i = 0; i < typeSpec.childCount; i++) {
       const child = typeSpec.child(i);
@@ -246,7 +263,12 @@ export class SymbolExtractor {
     // Fallback: look for identifier or type_identifier child
     for (let i = 0; i < node.childCount; i++) {
       const child = node.child(i);
-      if (child && (child.type === "identifier" || child.type === "type_identifier" || child.type === "property_identifier")) {
+      if (
+        child &&
+        (child.type === "identifier" ||
+          child.type === "type_identifier" ||
+          child.type === "property_identifier")
+      ) {
         return child.text;
       }
     }
@@ -260,13 +282,15 @@ export class SymbolExtractor {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private getSignature(node: any, language: SupportedLanguage): string | undefined {
     // For functions/methods, try to get the signature from the first line
-    if (
-      node.type === "function_declaration" ||
-      node.type === "method_definition" ||
-      node.type === "function_definition" ||
-      node.type === "method_declaration"
-    ) {
-      // Get the text up to the opening brace or colon
+    const functionTypes = [
+      "function_declaration",
+      "method_definition",
+      "function_definition",
+      "method_declaration",
+      "function_item",
+    ];
+
+    if (functionTypes.includes(node.type)) {
       const text = node.text as string;
       const lines = text.split("\n");
       if (lines.length > 0) {
@@ -287,17 +311,5 @@ export class SymbolExtractor {
       }
     }
     return undefined;
-  }
-
-  /**
-   * Check if a node type is a container (can have child symbols)
-   */
-  private isContainer(nodeType: string): boolean {
-    return (
-      nodeType === "class_declaration" ||
-      nodeType === "class_definition" ||
-      nodeType === "interface_declaration" ||
-      nodeType === "type_spec"
-    );
   }
 }
