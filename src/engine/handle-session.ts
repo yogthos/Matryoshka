@@ -151,11 +151,18 @@ export class HandleSession {
     // Clear any existing symbols before loading new content
     this.db.clearSymbols();
 
-    // Extract symbols for code files
+    // Extract symbols for code files (graceful fallback if tree-sitter fails)
     const ext = extname(path);
     if (ext && isExtensionSupported(ext)) {
-      await this.init();
-      await this.extractAndStoreSymbols(content, ext);
+      try {
+        await this.init();
+        await this.extractAndStoreSymbols(content, ext);
+      } catch (err) {
+        // tree-sitter may throw "Invalid argument" on some platforms/bindings
+        // Fall back to content-only mode (grep, text_stats still work)
+        console.error(`[HandleSession] Symbol extraction failed for ${ext}, continuing without symbols:`,
+          err instanceof Error ? err.message : String(err));
+      }
     }
 
     // Set SessionDB binding for solver access
