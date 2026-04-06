@@ -13,6 +13,7 @@
  */
 
 import type { LCTerm, CoercionType, SynthesisExample } from "./types.js";
+import { fuseRRF, type LineResult } from "./rrf.js";
 import { resolveConstraints } from "./constraint-resolver.js";
 import { run, Rel, eq, conde, exist, failo, type Var, type Substitution } from "../minikanren/index.js";
 import { synthesizeExtractor, compileToFunction, prettyPrint, type Example } from "../synthesis/evalo/index.js";
@@ -209,6 +210,33 @@ function evaluate(
         });
       }
       return results;
+    }
+
+    case "fuse": {
+      // Evaluate all collection sub-expressions
+      const signals: LineResult[][] = [];
+      for (const coll of term.collections) {
+        const result = evaluate(coll, tools, bindings, log, depth + 1);
+        if (!Array.isArray(result)) {
+          throw new Error(`fuse: expected array argument, got ${typeof result}`);
+        }
+        // Normalize to LineResult format — grep results have {match, line, lineNum, index, groups}
+        // bm25/fuzzy have {line, lineNum, score} — ensure all have score
+        const normalized: LineResult[] = (result as unknown[]).map((item: unknown) => {
+          const obj = item as Record<string, unknown>;
+          return {
+            ...(obj as object),             // base fields first (preserves extra fields like match, groups)
+            line: String(obj.line ?? ""),    // sanitized overrides after spread
+            lineNum: Number(obj.lineNum ?? 0),
+            score: Number(obj.score ?? 1),  // grep results lack score — default 1
+          };
+        });
+        signals.push(normalized);
+      }
+      log(`[Solver] Fusing ${signals.length} signals (${signals.map(s => s.length).join(" + ")} results)`);
+      const fused = fuseRRF(signals);
+      log(`[Solver] Fused into ${fused.length} results`);
+      return fused;
     }
 
     case "text_stats": {

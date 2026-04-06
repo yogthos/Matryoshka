@@ -480,6 +480,19 @@ function parseList(state: ParserState): LCTerm | null {
       return { tag: "bm25", query: query.value, limit };
     }
 
+    case "fuse": {
+      // (fuse <coll1> <coll2> [<coll3> ...]) — requires at least 2
+      const MAX_FUSE_ARGS = 10;
+      const collections: LCTerm[] = [];
+      while (peek(state) && peek(state)?.type !== "rparen" && collections.length < MAX_FUSE_ARGS) {
+        const coll = parseTerm(state);
+        if (!coll) break;
+        collections.push(coll);
+      }
+      if (collections.length < 2) return null;
+      return { tag: "fuse", collections };
+    }
+
     case "text_stats": {
       return { tag: "text_stats" };
     }
@@ -949,6 +962,8 @@ export function prettyPrint(term: LCTerm): string {
       return term.limit
         ? `(bm25 "${escapeForPrint(term.query)}" ${term.limit})`
         : `(bm25 "${escapeForPrint(term.query)}")`;
+    case "fuse":
+      return `(fuse ${term.collections.map(c => prettyPrint(c)).join(" ")})`;
     case "text_stats":
       return "(text_stats)";
     case "lines":

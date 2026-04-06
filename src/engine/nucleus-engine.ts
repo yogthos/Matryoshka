@@ -417,6 +417,7 @@ Nucleus Command Reference
 SEARCH OPERATIONS (impure - access document):
   (grep "pattern")              Search for regex pattern, returns matches
   (fuzzy_search "query" limit)  Fuzzy search, returns top matches by relevance
+  (bm25 "query" limit)          BM25 ranked keyword search, returns by relevance
   (text_stats)                  Get document statistics
   (lines start end)             Get lines in range (1-indexed)
 
@@ -426,6 +427,10 @@ SYMBOL OPERATIONS (requires tree-sitter - .ts, .js, .py, .go, .md, etc.):
   (get_symbol_body "name")      Get source code body for a symbol by name
   (get_symbol_body RESULTS)     Get source code body for symbol from previous query
   (find_references "name")      Find all references to an identifier
+
+FUSION:
+  (fuse expr1 expr2 ...)        Fuse results from multiple searches using RRF
+                                Example: (fuse (grep "ERROR") (bm25 "error handling"))
 
 COLLECTION OPERATIONS (pure - work on RESULTS):
   (filter RESULTS pred)         Keep items matching predicate

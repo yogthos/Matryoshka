@@ -56,6 +56,10 @@ function infer(term: LCTerm, env: TypeEnv): LCType {
       // bm25 returns array of {line, lineNum, score}
       return { tag: "array", element: { tag: "any" } };
 
+    case "fuse":
+      // fuse returns array of {line, lineNum, score, signals}
+      return { tag: "array", element: { tag: "any" } };
+
     case "text_stats":
       // text_stats returns {length, lineCount, sample}
       return { tag: "any" };

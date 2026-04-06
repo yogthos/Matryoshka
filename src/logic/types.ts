@@ -21,6 +21,7 @@ export type LCTerm =
   | LCGrep
   | LCFuzzySearch
   | LCBm25
+  | LCFuse
   | LCTextStats
   | LCLines
   | LCFilter
@@ -93,6 +94,16 @@ export interface LCBm25 {
   tag: "bm25";
   query: string;
   limit?: number;
+}
+
+/**
+ * (fuse <coll1> <coll2> [<coll3> ...]) - fuse multiple result arrays using RRF
+ * Combines results from different search operations (grep, bm25, fuzzy_search)
+ * using score-weighted Reciprocal Rank Fusion
+ */
+export interface LCFuse {
+  tag: "fuse";
+  collections: LCTerm[];
 }
 
 /**
