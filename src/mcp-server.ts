@@ -93,6 +93,13 @@ const ANALYZE_DOCUMENT_TOOL: MCPTool = {
         type: "number",
         description: "Maximum number of exploration turns (default: 10)",
       },
+      timeoutMs: {
+        type: "number",
+        description:
+          "Hard outer timeout for the entire FSM run, in milliseconds. " +
+          "Default 900000 (15 min). Raise this for slow models or large " +
+          "documents where 10+ turns take longer than the default cap.",
+      },
     },
     required: ["query", "filePath"],
   },
@@ -322,10 +329,11 @@ export function createMCPServer(options: MCPServerOptions = {}): MCPServerInstan
 
       // Handle analyze_document
       if (name === "analyze_document") {
-        const { query, filePath, maxTurns } = args as {
+        const { query, filePath, maxTurns, timeoutMs } = args as {
           query: string;
           filePath: string;
           maxTurns?: number;
+          timeoutMs?: number;
         };
 
         const analyzePathError = validateFilePath(filePath);
@@ -343,6 +351,7 @@ export function createMCPServer(options: MCPServerOptions = {}): MCPServerInstan
           const result = await runRLM(query, filePath, {
             llmClient: client,
             maxTurns: maxTurns || 10,
+            fsmTimeoutMs: typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : undefined,
           });
 
           const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);

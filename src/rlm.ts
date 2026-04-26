@@ -440,6 +440,17 @@ export interface RLMOptions {
    */
   compactionThresholdChars?: number;
   /**
+   * Hard outer ceiling on the entire FSM run, in milliseconds. Acts as
+   * a Promise.race against the FSM loop — when it fires, the run
+   * rejects regardless of where the FSM is. Distinct from
+   * `maxTimeoutMs`, which is the FSM's own between-turn check. Default
+   * 15 minutes — paper-aligned for slow models on large docs (10
+   * turns × 30s/turn = 5 min was the prior default and tripped on
+   * legitimate work; 15 min holds the safety net without strangling
+   * real runs).
+   */
+  fsmTimeoutMs?: number;
+  /**
    * Internal — current sub-RLM depth. Automatically incremented by
    * the sub-RLM spawner each time a `(llm_query …)` call recurses.
    * Never set this manually from user code; it's a private parameter
@@ -856,7 +867,13 @@ export async function runRLMFromContent(
     });
 
     const engine = new FSMEngine<RLMContext>();
-    const FSM_TIMEOUT_MS = 5 * 60 * 1000;
+    // Hard outer ceiling on the FSM run (Promise.race guard). Distinct
+    // from `maxTimeoutMs` (the FSM's own between-turn check). Default
+    // 15 min — paper-aligned for slow models on large docs (10 turns ×
+    // 30s/turn = 5 min was the prior hardcoded value, tripped on
+    // legitimate work). Per-call override via `fsmTimeoutMs` keeps it
+    // tunable.
+    const FSM_TIMEOUT_MS = options.fsmTimeoutMs ?? 15 * 60 * 1000;
     // The timer must be stored so we can clear it when the FSM wins the
     // race — otherwise the setTimeout holds the Node event loop alive for
     // FSM_TIMEOUT_MS after a successful run (CLI hangs, long-lived

@@ -212,6 +212,39 @@ describe("RLM Executor", () => {
       expect(firstPrompt).toMatch(/3 chunks/i);
       expect(firstPrompt).toMatch(/total chars/i);
     });
+
+    // Paper-conformance fix (T1.3): the outer FSM timeout was hardcoded
+    // at 5 min, which tripped on legitimate runs (10 turns × 30s/turn
+    // for a slow model). Raised default to 15 min and made it
+    // configurable per-call via fsmTimeoutMs so callers can tune it.
+    it("should respect a custom fsmTimeoutMs", async () => {
+      // Slow LLM: each call takes 1 second
+      const slowMockLLM = vi.fn(
+        () => new Promise<string>((resolve) =>
+          setTimeout(() => resolve('(grep "x")'), 1000)
+        )
+      );
+
+      const t0 = Date.now();
+      let caught: unknown;
+      try {
+        await runRLM("query", "./test-fixtures/small.txt", {
+          llmClient: slowMockLLM,
+          maxTurns: 100,
+          // Force a tight cap so the test finishes deterministically
+          fsmTimeoutMs: 200,
+        });
+      } catch (err) {
+        caught = err;
+      }
+      const elapsed = Date.now() - t0;
+
+      // Should abort well under the 100-turn ceiling — within ~3× the
+      // configured timeout to account for the in-flight LLM call.
+      expect(elapsed).toBeLessThan(3500);
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toMatch(/FSM run exceeded 200ms timeout/);
+    });
   });
 });
 
