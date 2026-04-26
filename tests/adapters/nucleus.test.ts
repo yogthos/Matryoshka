@@ -46,6 +46,31 @@ describe("Nucleus Adapter", () => {
       expect(prompt).toContain("<<<FINAL>>>");
       expect(prompt).toContain("<<<END>>>");
     });
+
+    // Paper-conformance fixes (T2.x): the prompt must teach (seq …)
+    // composition (so the model can run multi-step strategies in one
+    // turn) and encourage batching for sub-LLM calls. The "ONE command
+    // per turn" framing — which forced 3-step strategies into 3 turns
+    // and was the dominant timeout contributor — is gone.
+    it("should teach (seq …) for multi-step composition", () => {
+      expect(prompt).toContain("(seq");
+      expect(prompt).toContain("RESULTS threads through");
+    });
+
+    it("should not enforce ONE-command-per-turn", () => {
+      // Old framing was literally "ONE command per turn." which
+      // discouraged composition. Replaced with guidance that
+      // composes via (seq …).
+      expect(prompt).not.toMatch(/^ONE command per turn\./m);
+    });
+
+    it("should encourage batching of sub-LLM calls", () => {
+      // The Qwen variant of the paper prompt explicitly tells the model
+      // to batch llm_query rather than fire one per item — we should do
+      // the same.
+      expect(prompt).toMatch(/BATCH/i);
+      expect(prompt).toMatch(/rlm_batch/);
+    });
   });
 
   describe("extractCode", () => {

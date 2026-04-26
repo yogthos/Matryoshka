@@ -25,7 +25,7 @@ function buildSystemPrompt(
   if (!Number.isFinite(contextLength) || contextLength < 0) contextLength = 0;
   const sizeCategory = contextLength < 2000 ? "SMALL" : "LARGE";
 
-  return `ONE command per turn.
+  return `One S-expression per turn. Compose multi-step strategies with (seq …) so a single turn can chain commands instead of taking a turn per step.
 
 SEARCH:
 (grep "pat")              → matched lines + lineNums
@@ -42,6 +42,12 @@ TRANSFORM:
 (map RESULTS (lambda x (match x "pat" 1)))
 (count RESULTS)   (sum RESULTS)
 
+COMPOSE (multi-step in ONE turn):
+(seq expr1 expr2 ... exprN)   → run in order, RESULTS threads through, value = last expr
+  Use this aggressively. Prefer
+    (seq (grep "X") (filter RESULTS (lambda x …)) (count RESULTS))
+  over three separate turns. Each turn costs an LLM round-trip.
+
 SUB-LLM (work grep can't do):
 (llm_query "...{items}" (items RESULTS))   → one call over binding
 (map RESULTS (lambda x (llm_query "..." (item x))))   → per-item
@@ -50,6 +56,8 @@ Rules:
   prompt literal w/ {name} placeholders
   each (name TERM) fills one placeholder
   use for classify/summarize/paraphrase, not regex
+  BATCH heavily — one llm_query over a whole chunk beats one-per-item.
+  For per-item work use (rlm_batch …) so calls fire concurrently.
 
 CODE:
 (list_symbols)  (list_symbols "function")
