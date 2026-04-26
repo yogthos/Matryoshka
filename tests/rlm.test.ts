@@ -245,6 +245,82 @@ describe("RLM Executor", () => {
       expect(caught).toBeInstanceOf(Error);
       expect((caught as Error).message).toMatch(/FSM run exceeded 200ms timeout/);
     });
+
+    // Paper-conformance fix (T1.4): the reference impl enables
+    // compaction by default at ~75% of model context. Ours required
+    // an explicit compactionThresholdChars, so long runs would
+    // silently bloat history past the model's window. Default now
+    // fires when history concatenation exceeds 20K chars.
+    it("should compact history by default when prompt grows past the default threshold", async () => {
+      // Build a doc whose `grep "X"` produces many large matches.
+      const bigDoc = Array.from(
+        { length: 200 },
+        (_, i) => `LINE-${i}: ${"X".repeat(200)} payload entry`
+      ).join("\n");
+      const { runRLMFromContent } = await import("../src/rlm.js");
+
+      let summarizeCalls = 0;
+      let turn = 0;
+      const promptSizes: number[] = [];
+      let lastPrompt = "";
+      const llm = vi.fn(async (prompt: string) => {
+        promptSizes.push(prompt.length);
+        lastPrompt = prompt;
+        if (/Summarize your progress so far/.test(prompt)) {
+          summarizeCalls++;
+          return "Summary: ran greps.";
+        }
+        turn++;
+        if (turn >= 30) return "<<<FINAL>>>done<<<END>>>";
+        // Vary the pattern each turn to avoid the FSM's repeated-code
+        // guard short-circuiting execution and starving the feedback
+        // channel — we need real per-turn result previews to bloat
+        // history and hit the threshold.
+        return `(grep "LINE-${turn}:")`;
+      });
+
+      const result = await runRLMFromContent("scan", bigDoc, {
+        llmClient: llm,
+        maxTurns: 40,
+      });
+
+      // If compaction never fires, surface the prompt-size trajectory
+      // so the failure tells us *why* (threshold mis-tuned vs. wiring
+      // broken).
+      expect(
+        summarizeCalls,
+        `prompt sizes per turn: ${promptSizes.join(", ")}\n--last prompt tail--\n${lastPrompt.slice(-1000)}`
+      ).toBeGreaterThanOrEqual(1);
+      expect(result).toMatch(/done|Summary/);
+    });
+
+    it("should allow callers to disable compaction by passing compactionThresholdChars: 0", async () => {
+      const bigDoc = Array.from(
+        { length: 200 },
+        (_, i) => `LINE-${i}: ${"X".repeat(200)} payload entry`
+      ).join("\n");
+      const { runRLMFromContent } = await import("../src/rlm.js");
+
+      let summarizeCalls = 0;
+      let turn = 0;
+      const llm = vi.fn(async (prompt: string) => {
+        if (/Summarize your progress so far/.test(prompt)) {
+          summarizeCalls++;
+          return "Summary";
+        }
+        turn++;
+        if (turn >= 12) return "<<<FINAL>>>done<<<END>>>";
+        return `(grep "LINE-${turn}:")`;
+      });
+
+      await runRLMFromContent("scan", bigDoc, {
+        llmClient: llm,
+        maxTurns: 16,
+        compactionThresholdChars: 0, // explicit opt-out
+      });
+
+      expect(summarizeCalls).toBe(0);
+    });
   });
 });
 

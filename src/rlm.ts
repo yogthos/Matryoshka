@@ -524,9 +524,26 @@ export async function runRLMFromContent(
     maxTimeoutMs,
     maxTokens,
     maxErrors,
-    compactionThresholdChars,
+    compactionThresholdChars: rawCompactionThresholdChars,
     _subRLMDepth = 0,
   } = options;
+
+  // Paper-conformance fix (T1.4): the reference impl enables compaction
+  // by default at ~75% of model context. We default-on at 20_000 chars
+  // — fires around turn 12-15 of substantial result feedback (each turn
+  // contributes ~1500 chars after pruneHistory caps and the 4KB-Result
+  // truncate apply). Comfortably under the 8K-token window of even the
+  // smallest practical models (~24K chars at 3 chars/token); leaves
+  // headroom for the system prompt + last few turns after compaction.
+  // Without this, long runs silently bloat history past the model's
+  // window. Caller can disable with 0/negative; otherwise undefined
+  // picks the default.
+  const compactionThresholdChars =
+    rawCompactionThresholdChars === undefined
+      ? 20_000
+      : rawCompactionThresholdChars > 0
+        ? rawCompactionThresholdChars
+        : undefined;
 
   // Validate sessionId
   const safeSessionId = typeof rawSessionId === "string" && rawSessionId.length > 0 && rawSessionId.length <= 256 && /^[a-zA-Z0-9_-]+$/.test(rawSessionId)
