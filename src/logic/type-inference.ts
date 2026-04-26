@@ -203,6 +203,11 @@ function infer(term: LCTerm, env: TypeEnv): LCType {
       // All three chunking primitives return array<string>.
       return { tag: "array", element: { tag: "string" } };
 
+    case "seq":
+      // (seq …) evaluates to the type of the LAST subexpr. Empty seq is
+      // rejected by the parser so we can safely take the tail.
+      return infer(term.exprs[term.exprs.length - 1], env);
+
     case "sum":
       return { tag: "number" };
 

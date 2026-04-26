@@ -588,6 +588,24 @@ function parseList(state: ParserState, depth: number = 0): LCTerm | null {
       return { tag: "chunk_by_regex", pattern: patTerm.value };
     }
 
+    case "seq": {
+      // Parse a variadic list of subexprs. Empty seq is meaningless,
+      // single-expr seq is silly but accepted (degrades to that expr's
+      // value). Cap at 64 to bound damage from a runaway emit.
+      const MAX_SEQ_EXPRS = 64;
+      const exprs: LCTerm[] = [];
+      while (true) {
+        const next = peek(state);
+        if (!next || next.type === "rparen") break;
+        const sub = parseTerm(state, d);
+        if (!sub) return null;
+        exprs.push(sub);
+        if (exprs.length > MAX_SEQ_EXPRS) return null;
+      }
+      if (exprs.length === 0) return null; // empty seq is meaningless
+      return { tag: "seq", exprs };
+    }
+
     case "filter": {
       const collection = parseTerm(state, d);
       if (!collection) return null;
@@ -1389,6 +1407,8 @@ export function prettyPrint(term: LCTerm): string {
       return `(chunk_by_lines ${term.lineCount})`;
     case "chunk_by_regex":
       return `(chunk_by_regex "${escapeForPrint(term.pattern)}")`;
+    case "seq":
+      return `(seq ${term.exprs.map(e => prettyPrint(e)).join(" ")})`;
     case "filter":
       return `(filter ${prettyPrint(term.collection)} ${prettyPrint(term.predicate)})`;
     case "map":

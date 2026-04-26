@@ -779,6 +779,41 @@ async function evaluate(
       return chunks;
     }
 
+    case "seq": {
+      // Evaluate each subexpr in order, threading bindings through.
+      // Each subexpr's result is bound to RESULTS (when it's an array)
+      // and to a fresh `_seqN` slot, making it visible to later
+      // subexprs. The whole seq evaluates to the value of the LAST
+      // subexpr.
+      //
+      // Per project rule (correctness > performance): subexprs run
+      // sequentially even though some pairs are independent —
+      // dependent expressions are the common case (later steps
+      // reference RESULTS of earlier steps), and parallel scheduling
+      // would require dataflow analysis we don't have.
+      const MAX_SEQ_EXPRS_RUNTIME = 64;
+      if (term.exprs.length === 0) {
+        throw new Error("seq: empty seq is meaningless");
+      }
+      if (term.exprs.length > MAX_SEQ_EXPRS_RUNTIME) {
+        throw new Error(`seq: too many subexprs (${term.exprs.length} > ${MAX_SEQ_EXPRS_RUNTIME})`);
+      }
+      let last: unknown = null;
+      for (let i = 0; i < term.exprs.length; i++) {
+        const sub = term.exprs[i];
+        last = await evaluate(sub, tools, bindings, log, depth + 1);
+        // Make every step's result available to subsequent steps so the
+        // model can write `(seq (grep ...) (count RESULTS))`. Mirror
+        // what handleAnalyze does at the FSM boundary, but in-loop so
+        // RESULTS is fresh inside the same turn.
+        if (Array.isArray(last)) {
+          bindings.set("RESULTS", last);
+        }
+        bindings.set(`_seq${i + 1}`, last);
+      }
+      return last;
+    }
+
     case "chunk_by_regex": {
       // Split the document wherever `pattern` matches. Empty chunks
       // produced by adjacent delimiters are dropped — the paper's OOLONG

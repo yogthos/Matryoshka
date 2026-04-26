@@ -78,7 +78,8 @@ export type LCTerm =
   | LCShowVars
   | LCChunkBySize
   | LCChunkByLines
-  | LCChunkByRegex;
+  | LCChunkByRegex
+  | LCSeq;
 
 /**
  * (input) - reference to the current input string
@@ -221,6 +222,31 @@ export interface LCChunkByLines {
 export interface LCChunkByRegex {
   tag: "chunk_by_regex";
   pattern: string;
+}
+
+/**
+ * (seq <expr1> <expr2> ... <exprN>) - evaluate exprs in order, threading
+ * solver bindings through. The result of each subexpr is bound to a
+ * fresh `_seqN` slot (and to `RESULTS` if it's an array), making it
+ * available to later subexprs. The whole `seq` evaluates to the value
+ * of the LAST subexpr.
+ *
+ * Paper-conformance: lets the model emit a multi-step program in a
+ * single turn — the paper's Algorithm 1 has each REPL turn run a full
+ * code block, not one statement. Without this primitive, our
+ * "ONE command per turn" forced 3-step strategies into 3 turns, which
+ * is a major contributor to the timeout problem on large docs.
+ *
+ * Example:
+ *   (seq (grep "ERROR")
+ *        (filter RESULTS (lambda x (match x "timeout" 0)))
+ *        (count RESULTS))
+ *
+ * Empty seq is rejected by the parser (a no-op seq is meaningless).
+ */
+export interface LCSeq {
+  tag: "seq";
+  exprs: LCTerm[];
 }
 
 /**

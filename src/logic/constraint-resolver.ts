@@ -136,6 +136,9 @@ export function resolveConstraints(term: LCTerm): ResolvedTerm {
       case "list_symbols":
         return t;
 
+      case "seq":
+        return { ...t, exprs: t.exprs.map((e) => resolve(e, depth + 1)) };
+
       default:
         return t;
     }

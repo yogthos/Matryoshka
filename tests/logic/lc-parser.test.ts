@@ -420,6 +420,102 @@ describe("Source-pattern checks (from audits)", () => {
       });
     });
 
+  // Paper-conformance fix (T1.2): the `(seq …)` primitive lets the
+  // model emit a multi-step program in one turn instead of consuming
+  // a turn per S-expression. The parser must accept variadic seq,
+  // reject empty seq, and round-trip via prettyPrint.
+  describe("seq", () => {
+    it("should parse a seq with multiple subexprs", () => {
+      const result = parse('(seq (grep "ERROR") (count RESULTS))');
+      expect(result.success).toBe(true);
+      expect(result.term?.tag).toBe("seq");
+      if (result.term?.tag === "seq") {
+        expect(result.term.exprs).toHaveLength(2);
+        expect(result.term.exprs[0]?.tag).toBe("grep");
+        expect(result.term.exprs[1]?.tag).toBe("count");
+      }
+    });
+
+    it("should reject empty (seq) — empty seq is meaningless", () => {
+      const result = parse("(seq)");
+      expect(result.success).toBe(false);
+    });
+
+    it("should accept single-expr (seq)", () => {
+      const result = parse('(seq (grep "X"))');
+      expect(result.success).toBe(true);
+      expect(result.term?.tag).toBe("seq");
+      if (result.term?.tag === "seq") {
+        expect(result.term.exprs).toHaveLength(1);
+      }
+    });
+
+    it("should support nested seq", () => {
+      const result = parse(
+        '(seq (grep "a") (seq (count RESULTS) (sum RESULTS)))'
+      );
+      expect(result.success).toBe(true);
+      if (result.term?.tag === "seq") {
+        expect(result.term.exprs).toHaveLength(2);
+        expect(result.term.exprs[1]?.tag).toBe("seq");
+      }
+    });
+
+    it("should round-trip via prettyPrint with printable subexprs", () => {
+      // Use grep + grep — both have prettyPrint cases. (Many other LC
+      // primitives don't print yet, e.g. count → "<unknown:count>";
+      // that's a pre-existing limitation, not specific to seq.)
+      const src = '(seq (grep "X") (grep "Y"))';
+      const result = parse(src);
+      expect(result.success).toBe(true);
+      if (result.term) {
+        const printed = prettyPrint(result.term);
+        expect(printed).toMatch(/^\(seq /);
+        const reparsed = parse(printed);
+        expect(reparsed.success).toBe(true);
+        expect(reparsed.term?.tag).toBe("seq");
+      }
+    });
+
+    it("should evaluate seq sequentially, threading RESULTS into later exprs", async () => {
+      // Build a tiny doc with two distinct rows; seq runs grep then count.
+      const doc = "ERROR: a\nWARN: b\nERROR: c\nINFO: d\n";
+      const tools: SolverTools = {
+        context: doc,
+        lines: doc.split("\n"),
+        grep: (pattern: string) => {
+          const re = new RegExp(pattern, "gmi");
+          const out: Array<{
+            match: string; line: string; lineNum: number; index: number; groups: string[];
+          }> = [];
+          let m: RegExpExecArray | null;
+          while ((m = re.exec(doc)) !== null) {
+            const lineNum = (doc.slice(0, m.index).match(/\n/g) || []).length + 1;
+            out.push({ match: m[0], line: doc.split("\n")[lineNum - 1] || "", lineNum, index: m.index, groups: [] });
+          }
+          return out;
+        },
+        fuzzy_search: () => [],
+        bm25: () => [],
+        semantic: () => [],
+        text_stats: () => ({ length: doc.length, lineCount: 4, sample: { start: "", middle: "", end: "" } }),
+      };
+
+      // (seq (grep "ERROR") (count RESULTS)) should give 2 — both ERROR
+      // rows. Without the seq primitive this would take 2 turns.
+      const r = await solve(
+        { tag: "seq", exprs: [
+          { tag: "grep", pattern: "ERROR" },
+          { tag: "count", collection: { tag: "var", name: "RESULTS" } },
+        ]},
+        tools,
+        new Map()
+      );
+      expect(r.success).toBe(true);
+      expect(r.value).toBe(2);
+    });
+  });
+
   // from tests/audit96.test.ts #12 — parse() errors out on oversize input, doesn't silently truncate
   describe("#12 — parse() errors out on oversize input, doesn't silently truncate", () => {
       it("an input with > MAX_TOKENS tokens produces a parse failure, not a partial success", async () => {
