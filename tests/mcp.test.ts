@@ -196,16 +196,33 @@ describe("MCP Server", () => {
       );
 
       expect(result.content[0].text).toContain("done");
-      expect(notifications.length).toBe(3);
+      // Heartbeat timer fires every 30s; the test runs in <1s so only
+      // the per-turn pings should appear. Allow >=3 to keep the test
+      // resilient if heartbeats land later.
+      const turnPings = notifications.filter((n) =>
+        (n.params.message ?? "").startsWith("Turn ")
+      );
+      expect(turnPings.length).toBe(3);
+      // Wire-format checks across every notification.
       for (const n of notifications) {
         expect(n.method).toBe("notifications/progress");
         expect(n.params.progressToken).toBe("test-token-123");
-        expect(n.params.total).toBe(5);
         expect(typeof n.params.message).toBe("string");
+        // `total` intentionally omitted — sub-RLMs make a useful
+        // total unknowable, and stale totals confuse percent renderers.
+        expect(n.params.total).toBeUndefined();
       }
-      expect(notifications[0].params.progress).toBe(1);
-      expect(notifications[1].params.progress).toBe(2);
-      expect(notifications[2].params.progress).toBe(3);
+      // Monotonic, strictly increasing progress counter — the
+      // top-level run cannot rewind below 1, and a sub-RLM (if added)
+      // would continue counting forward from wherever the parent left.
+      expect(turnPings[0].params.progress).toBe(1);
+      expect(turnPings[1].params.progress).toBe(2);
+      expect(turnPings[2].params.progress).toBe(3);
+      // Top-level run has depth 0, so the message must NOT mention
+      // sub-RLM depth.
+      for (const n of turnPings) {
+        expect(n.params.message).not.toContain("sub-RLM");
+      }
     });
 
     it("should not call sendNotification when no progressSink is supplied", async () => {

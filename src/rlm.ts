@@ -698,6 +698,13 @@ export async function runRLMFromContent(
             maxTimeoutMs: remainingTimeoutMs(),
             maxTokens,
             maxErrors,
+            // Thread progress through nested runs — without this, while
+            // a child's FSM is blocking the parent's `handleQueryLLM`,
+            // no notifications fire and the client times out mid-recur.
+            // Monotonicity of the wire `progress` field is enforced at
+            // the MCP-server seam (separate counter), so passing the
+            // raw callback here is safe.
+            onProgress,
           }
         );
         // runRLMFromContent normally returns a string (the final answer
@@ -753,6 +760,8 @@ export async function runRLMFromContent(
           maxTimeoutMs: remainingTimeoutMs(),
           maxTokens,
           maxErrors,
+          // See subRLMSpawner above — same rationale for nested runs.
+          onProgress,
         });
         if (typeof childResult === "string") return childResult;
         if (childResult === null || childResult === undefined) return "";
@@ -892,6 +901,7 @@ export async function runRLMFromContent(
       maxErrors,
       compactionThresholdChars,
       onProgress,
+      subRLMDepth: _subRLMDepth,
     });
 
     const engine = new FSMEngine<RLMContext>();

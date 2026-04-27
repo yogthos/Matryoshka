@@ -161,6 +161,48 @@ describe("subRLMMaxDepth — recursive sub-RLM spawn", () => {
     expect(childCalls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("propagates onProgress to spawned sub-RLMs with correct depth", async () => {
+    // Sub-RLMs block the parent's FSM while they run. Without progress
+    // propagation a 25-turn child × 30s/turn = 12.5 min of silence,
+    // which trips the MCP client's 10min request cap mid-recursion.
+    // Verify: (a) parent emits depth=0, (b) child emits depth=1.
+    let parentTurn = 0;
+    const llm = async (prompt: string): Promise<string> => {
+      if (prompt.includes("Analyze and answer based on")) {
+        // Child runs a single turn then finalizes — minimal but enough
+        // to confirm a depth=1 progress fires.
+        return `<<<FINAL>>>child done<<<END>>>`;
+      }
+      parentTurn++;
+      if (parentTurn === 1) {
+        return `(llm_query "inspect: hello")`;
+      }
+      return `<<<FINAL>>>parent done<<<END>>>`;
+    };
+
+    const progressEvents: Array<{ depth: number; turn: number }> = [];
+    const result = await runRLMFromContent(
+      "spawn a sub-RLM and observe progress depth",
+      "doc payload",
+      {
+        llmClient: llm,
+        adapter: createNucleusAdapter(),
+        maxTurns: 5,
+        ragEnabled: false,
+        subRLMMaxDepth: 1,
+        onProgress: (info) => {
+          progressEvents.push({ depth: info.depth, turn: info.turn });
+        },
+      }
+    );
+
+    expect(typeof result).toBe("string");
+    // Parent must have fired at least once at depth 0.
+    expect(progressEvents.some((e) => e.depth === 0)).toBe(true);
+    // Sub-RLM must have fired at least once at depth 1.
+    expect(progressEvents.some((e) => e.depth === 1)).toBe(true);
+  });
+
   it("subRLMMaxDepth enforces a depth cap — falls back to flat at the boundary", async () => {
     // With subRLMMaxDepth=1, the FIRST sub-RLM runs a full FSM loop. Any
     // llm_query from inside that sub-RLM (depth=2) must fall back to

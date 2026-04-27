@@ -23,16 +23,25 @@ import type { LLMQueryFn } from "../llm/types.js";
 // ===== CONTEXT =====
 
 /**
- * Payload reported by the optional onProgress callback. Fires at every
- * turn boundary so the MCP server can translate it into a
- * `notifications/progress` ping (keeps the client's request timer alive
- * during long synthesis runs).
+ * Payload reported by the optional onProgress callback. Fires after the
+ * per-turn limit checks pass (so we don't ping for turns that abort
+ * immediately) and on out-of-band heartbeats from the MCP layer when a
+ * single LLM call is taking longer than the client cap. The MCP server
+ * translates each fire into a `notifications/progress` ping that keeps
+ * the client's request timer alive during long synthesis runs.
+ *
+ * `depth` reflects the sub-RLM nesting level (0 = top-level run); kept
+ * here so the bridging layer can render it into the user-visible
+ * message and so monotonicity can be enforced at a single seam (the
+ * MCP server uses its own counter — turn numbers from nested children
+ * would otherwise rewind relative to the parent).
  */
 export interface ProgressInfo {
   turn: number;
   maxTurns: number;
   elapsedMs: number;
-  phase: "turn-start";
+  depth: number;
+  phase: "turn-start" | "heartbeat";
 }
 
 export interface RLMContext {
@@ -47,13 +56,22 @@ export interface RLMContext {
   maxTurns: number;
   log: (msg: string) => void;
   /**
-   * Optional callback fired at the start of every FSM turn. Used by the
-   * MCP server to emit `notifications/progress` so the client's request
-   * timer resets while a long synthesis run is still making progress.
-   * Errors thrown by the callback are swallowed — progress reporting is
-   * best-effort and must not interfere with the FSM loop.
+   * Optional callback fired after each turn's limit checks pass. Used
+   * by the MCP server to emit `notifications/progress` so the client's
+   * request timer resets while a long synthesis run is still making
+   * progress. Errors thrown by the callback are swallowed — progress
+   * reporting is best-effort and must not interfere with the FSM loop.
    */
   onProgress?: (info: ProgressInfo) => void;
+  /**
+   * Sub-RLM nesting depth, threaded through from `RLMOptions._subRLMDepth`.
+   * 0 = top-level run; >0 = spawned by a parent's `(llm_query …)` or
+   * `(rlm_query …)`. Reported via `ProgressInfo.depth` so the MCP layer
+   * can label notifications and (with a separate monotonic counter)
+   * keep the client's progress field strictly increasing across nested
+   * runs.
+   */
+  subRLMDepth: number;
 
   // Mutable state
   turn: number;
@@ -396,19 +414,6 @@ async function handleQueryLLM(ctx: RLMContext): Promise<RLMContext> {
   ctx.log(`\n${"─".repeat(50)}`);
   ctx.log(`[Turn ${ctx.turn}/${ctx.maxTurns}] Querying LLM...`);
 
-  if (ctx.onProgress) {
-    try {
-      ctx.onProgress({
-        turn: ctx.turn,
-        maxTurns: ctx.maxTurns,
-        elapsedMs: Date.now() - ctx.startTime,
-        phase: "turn-start",
-      });
-    } catch {
-      // Best-effort — never let a misbehaving progress sink break the FSM.
-    }
-  }
-
   // Phase 5 — pre-call limit checks. Hitting any limit terminates
   // the loop with a partial-answer abort string. The check runs
   // BEFORE the LLM call so we don't waste a round-trip after the
@@ -444,6 +449,24 @@ async function handleQueryLLM(ctx: RLMContext): Promise<RLMContext> {
       `[Turn ${ctx.turn}] Aborting — error cap (${ctx.consecutiveErrors} consecutive)`
     );
     return ctx;
+  }
+
+  // Limit checks have passed — fire a progress ping before the LLM
+  // round-trip (which is the longest-blocking step in a turn). This
+  // resets the MCP client's request timer; without it, long synthesis
+  // runs hit the client cap mid-turn and the result is discarded.
+  if (ctx.onProgress) {
+    try {
+      ctx.onProgress({
+        turn: ctx.turn,
+        maxTurns: ctx.maxTurns,
+        elapsedMs: Date.now() - ctx.startTime,
+        depth: ctx.subRLMDepth,
+        phase: "turn-start",
+      });
+    } catch {
+      // Best-effort — never let a misbehaving progress sink break the FSM.
+    }
   }
 
   // Phase 6 — check whether the next prompt would exceed the
@@ -1116,6 +1139,7 @@ export function createInitialContext(opts: {
   maxErrors?: number;
   compactionThresholdChars?: number;
   onProgress?: (info: ProgressInfo) => void;
+  subRLMDepth?: number;
 }): RLMContext {
   return {
     query: opts.query,
@@ -1128,6 +1152,7 @@ export function createInitialContext(opts: {
     maxTurns: opts.maxTurns,
     log: opts.log,
     onProgress: opts.onProgress,
+    subRLMDepth: opts.subRLMDepth ?? 0,
 
     turn: 0,
     history: [

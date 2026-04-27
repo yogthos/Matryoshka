@@ -375,31 +375,63 @@ export function createMCPServer(options: MCPServerOptions = {}): MCPServerInstan
           options.onRunRLM({ maxTurns });
         }
 
+        // Bridge FSM progress → MCP `notifications/progress`. A single
+        // monotonic counter tracks every notification (turn pings AND
+        // heartbeat ticks AND nested sub-RLM turns), so the wire-level
+        // `progress` field is strictly increasing per MCP spec — turn
+        // numbers from a child sub-RLM would otherwise rewind below the
+        // parent's. `total` is intentionally omitted: with sub-RLMs,
+        // the cumulative turn budget across nested children isn't
+        // knowable up front, and a stale `total` would confuse clients
+        // that render percentages.
+        let progressCounter = 0;
+        const fireProgress = progressSink
+          ? (message: string) => {
+              progressCounter++;
+              // Fire-and-forget. The FSM swallows synchronous throws,
+              // and we don't want to await an unbounded transport
+              // write inside the turn loop.
+              void progressSink
+                .sendNotification({
+                  method: "notifications/progress",
+                  params: {
+                    progressToken: progressSink.progressToken,
+                    progress: progressCounter,
+                    message,
+                  },
+                })
+                .catch(() => {
+                  // Transport closed or client gone — best-effort.
+                });
+            }
+          : undefined;
+
+        // Out-of-band heartbeat: a single LLM call that exceeds the
+        // client's request cap would block the FSM's turn-boundary
+        // pings entirely. A 30s interval keeps the timer alive even
+        // mid-call. Cleared in `finally` so a hung process doesn't
+        // leak the timer.
+        const HEARTBEAT_INTERVAL_MS = 30_000;
+        const heartbeatStart = Date.now();
+        const heartbeatTimer = fireProgress
+          ? setInterval(() => {
+              const elapsedSec = Math.round((Date.now() - heartbeatStart) / 1000);
+              fireProgress(`Working… (${elapsedSec}s elapsed)`);
+            }, HEARTBEAT_INTERVAL_MS)
+          : undefined;
+
         try {
           const client = await ensureLLMClient();
-          const effectiveMaxTurns = maxTurns || 10;
           const result = await runRLM(query, filePath, {
             llmClient: client,
-            maxTurns: effectiveMaxTurns,
+            maxTurns: maxTurns || 10,
             fsmTimeoutMs: typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : undefined,
-            onProgress: progressSink
+            onProgress: fireProgress
               ? (info) => {
-                  // Fire-and-forget. The FSM swallows callback errors,
-                  // and we don't want to await an unbounded transport
-                  // write inside the turn loop.
-                  void progressSink
-                    .sendNotification({
-                      method: "notifications/progress",
-                      params: {
-                        progressToken: progressSink.progressToken,
-                        progress: info.turn,
-                        total: info.maxTurns,
-                        message: `Turn ${info.turn}/${info.maxTurns} (${Math.round(info.elapsedMs / 1000)}s elapsed)`,
-                      },
-                    })
-                    .catch(() => {
-                      // Transport closed or client gone — best-effort.
-                    });
+                  const depthSuffix = info.depth > 0 ? ` (sub-RLM depth ${info.depth})` : "";
+                  fireProgress(
+                    `Turn ${info.turn}/${info.maxTurns}${depthSuffix} (${Math.round(info.elapsedMs / 1000)}s elapsed)`
+                  );
                 }
               : undefined,
           });
@@ -414,6 +446,10 @@ export function createMCPServer(options: MCPServerOptions = {}): MCPServerInstan
           return {
             content: [{ type: "text", text: `Error: ${errorMessage}` }],
           };
+        } finally {
+          if (heartbeatTimer !== undefined) {
+            clearInterval(heartbeatTimer);
+          }
         }
       }
 
