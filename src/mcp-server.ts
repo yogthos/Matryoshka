@@ -64,10 +64,38 @@ function validateFilePath(filePath: string): string | null {
   return null;
 }
 
+/**
+ * Hook the MCP request handler can pass into `callTool` so long-running
+ * tools (analyze_document) can emit `notifications/progress` to the
+ * client. Without this, the MCP client's per-request timeout (~10min in
+ * Claude Code) fires while the server's FSM is still working, and the
+ * result is lost as -32001 RequestTimeout. Sending progress between
+ * turns keeps the client's timer alive.
+ *
+ * `progressToken` comes from `request.params._meta.progressToken`. When
+ * absent, no notifications should be sent (client didn't opt in).
+ */
+export interface ProgressSink {
+  progressToken: string | number;
+  sendNotification: (notification: {
+    method: "notifications/progress";
+    params: {
+      progressToken: string | number;
+      progress: number;
+      total?: number;
+      message?: string;
+    };
+  }) => Promise<void>;
+}
+
 export interface MCPServerInstance {
   name: string;
   getTools(): MCPTool[];
-  callTool(name: string, args: Record<string, unknown>): Promise<MCPToolResult>;
+  callTool(
+    name: string,
+    args: Record<string, unknown>,
+    progressSink?: ProgressSink
+  ): Promise<MCPToolResult>;
   start(): Promise<void>;
 }
 
@@ -248,7 +276,8 @@ export function createMCPServer(options: MCPServerOptions = {}): MCPServerInstan
 
     async callTool(
       name: string,
-      args: Record<string, unknown>
+      args: Record<string, unknown>,
+      progressSink?: ProgressSink
     ): Promise<MCPToolResult> {
       // Handle nucleus_commands (no args needed)
       if (name === "nucleus_commands") {
@@ -348,10 +377,31 @@ export function createMCPServer(options: MCPServerOptions = {}): MCPServerInstan
 
         try {
           const client = await ensureLLMClient();
+          const effectiveMaxTurns = maxTurns || 10;
           const result = await runRLM(query, filePath, {
             llmClient: client,
-            maxTurns: maxTurns || 10,
+            maxTurns: effectiveMaxTurns,
             fsmTimeoutMs: typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : undefined,
+            onProgress: progressSink
+              ? (info) => {
+                  // Fire-and-forget. The FSM swallows callback errors,
+                  // and we don't want to await an unbounded transport
+                  // write inside the turn loop.
+                  void progressSink
+                    .sendNotification({
+                      method: "notifications/progress",
+                      params: {
+                        progressToken: progressSink.progressToken,
+                        progress: info.turn,
+                        total: info.maxTurns,
+                        message: `Turn ${info.turn}/${info.maxTurns} (${Math.round(info.elapsedMs / 1000)}s elapsed)`,
+                      },
+                    })
+                    .catch(() => {
+                      // Transport closed or client gone — best-effort.
+                    });
+                }
+              : undefined,
           });
 
           const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
@@ -385,9 +435,20 @@ export function createMCPServer(options: MCPServerOptions = {}): MCPServerInstan
       }));
 
       // Call tool handler
-      server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const { name, arguments: args } = request.params;
-        const result = await this.callTool(name, args || {});
+        // The MCP client opts in to progress by attaching a progressToken
+        // to _meta. When present, build a sink that bridges the FSM's
+        // onProgress callback to `notifications/progress` on the wire.
+        const progressToken = request.params._meta?.progressToken;
+        const sink: ProgressSink | undefined =
+          progressToken !== undefined
+            ? {
+                progressToken,
+                sendNotification: (n) => extra.sendNotification(n),
+              }
+            : undefined;
+        const result = await this.callTool(name, args || {}, sink);
         return result;
       });
 

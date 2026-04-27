@@ -451,6 +451,15 @@ export interface RLMOptions {
    */
   fsmTimeoutMs?: number;
   /**
+   * Optional callback fired at every FSM turn boundary. Used by the MCP
+   * server to emit `notifications/progress` to the client so its request
+   * timer resets while synthesis is still making progress (without this
+   * the MCP client's ~10min cap fires before long runs complete and the
+   * result is discarded with -32001 RequestTimeout). Errors thrown by
+   * the callback are swallowed inside the FSM.
+   */
+  onProgress?: (info: import("./fsm/rlm-states.js").ProgressInfo) => void;
+  /**
    * Internal — current sub-RLM depth. Automatically incremented by
    * the sub-RLM spawner each time a `(llm_query …)` call recurses.
    * Never set this manually from user code; it's a private parameter
@@ -525,6 +534,7 @@ export async function runRLMFromContent(
     maxTokens,
     maxErrors,
     compactionThresholdChars: rawCompactionThresholdChars,
+    onProgress,
     _subRLMDepth = 0,
   } = options;
 
@@ -881,6 +891,7 @@ export async function runRLMFromContent(
       maxTokens,
       maxErrors,
       compactionThresholdChars,
+      onProgress,
     });
 
     const engine = new FSMEngine<RLMContext>();

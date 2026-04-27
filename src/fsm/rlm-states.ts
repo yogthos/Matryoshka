@@ -22,6 +22,19 @@ import type { LLMQueryFn } from "../llm/types.js";
 
 // ===== CONTEXT =====
 
+/**
+ * Payload reported by the optional onProgress callback. Fires at every
+ * turn boundary so the MCP server can translate it into a
+ * `notifications/progress` ping (keeps the client's request timer alive
+ * during long synthesis runs).
+ */
+export interface ProgressInfo {
+  turn: number;
+  maxTurns: number;
+  elapsedMs: number;
+  phase: "turn-start";
+}
+
 export interface RLMContext {
   // Immutable config
   query: string;
@@ -33,6 +46,14 @@ export interface RLMContext {
   sessionId: string;
   maxTurns: number;
   log: (msg: string) => void;
+  /**
+   * Optional callback fired at the start of every FSM turn. Used by the
+   * MCP server to emit `notifications/progress` so the client's request
+   * timer resets while a long synthesis run is still making progress.
+   * Errors thrown by the callback are swallowed — progress reporting is
+   * best-effort and must not interfere with the FSM loop.
+   */
+  onProgress?: (info: ProgressInfo) => void;
 
   // Mutable state
   turn: number;
@@ -374,6 +395,19 @@ async function handleQueryLLM(ctx: RLMContext): Promise<RLMContext> {
   ctx.turn++;
   ctx.log(`\n${"─".repeat(50)}`);
   ctx.log(`[Turn ${ctx.turn}/${ctx.maxTurns}] Querying LLM...`);
+
+  if (ctx.onProgress) {
+    try {
+      ctx.onProgress({
+        turn: ctx.turn,
+        maxTurns: ctx.maxTurns,
+        elapsedMs: Date.now() - ctx.startTime,
+        phase: "turn-start",
+      });
+    } catch {
+      // Best-effort — never let a misbehaving progress sink break the FSM.
+    }
+  }
 
   // Phase 5 — pre-call limit checks. Hitting any limit terminates
   // the loop with a partial-answer abort string. The check runs
@@ -1081,6 +1115,7 @@ export function createInitialContext(opts: {
   maxTokens?: number;
   maxErrors?: number;
   compactionThresholdChars?: number;
+  onProgress?: (info: ProgressInfo) => void;
 }): RLMContext {
   return {
     query: opts.query,
@@ -1092,6 +1127,7 @@ export function createInitialContext(opts: {
     sessionId: opts.sessionId,
     maxTurns: opts.maxTurns,
     log: opts.log,
+    onProgress: opts.onProgress,
 
     turn: 0,
     history: [
