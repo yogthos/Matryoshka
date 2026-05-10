@@ -12,6 +12,7 @@ import type { SolverTools, Bindings } from "../logic/lc-solver.js";
 import type { FSMSpec, State } from "repl-sandbox";
 
 import { parse as parseLC } from "../logic/lc-parser.js";
+import { lintAndRepair } from "../logic/lc-linter.js";
 import { isClassifyTerm, validateClassifyExamples } from "../logic/lc-compiler.js";
 import { inferType, typeToString } from "../logic/type-inference.js";
 import { solve as solveTerm } from "../logic/lc-solver.js";
@@ -642,7 +643,35 @@ function handleValidate(ctx: RLMContext): RLMContext {
   if (!ctx.extractedCode) return ctx;
 
   ctx.log(`[Turn ${ctx.turn}] Parsing LC term...`);
-  const lcResult = parseLC(ctx.extractedCode);
+  let lcResult = parseLC(ctx.extractedCode);
+
+  // Mechanical-repair path: many LLM near-misses (missing trailing ')',
+  // surrounding prose, surplus closers) are fixable without a round-trip.
+  // We trigger the linter on outright parse failure AND when parse
+  // succeeded but left unconsumed tokens (almost always prose wrapped
+  // around the expression — without this hook the parser silently
+  // accepts a one-symbol term like `var "Here"` from "Here it is: (…)"
+  // and the FSM would charge the model a wasted turn for the type
+  // error). We only substitute when the repaired query parses cleanly
+  // with no leftover tokens; otherwise fall through.
+  const parseIsClean = lcResult.success && !!lcResult.term && !lcResult.remaining;
+  if (!parseIsClean) {
+    const lint = lintAndRepair(ctx.extractedCode);
+    if (lint.repaired !== null) {
+      const repairedResult = parseLC(lint.repaired);
+      if (
+        repairedResult.success &&
+        repairedResult.term &&
+        !repairedResult.remaining
+      ) {
+        ctx.log(
+          `[Turn ${ctx.turn}] LC parse recovered via linter (${lint.repairs.join("; ")})`
+        );
+        ctx.extractedCode = lint.repaired;
+        lcResult = repairedResult;
+      }
+    }
+  }
 
   if (!lcResult.success || !lcResult.term) {
     ctx.log(`[Turn ${ctx.turn}] LC parse error: ${lcResult.error}`);
