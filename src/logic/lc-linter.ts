@@ -72,14 +72,21 @@ function classifyStringPositions(input: string): boolean[] | null {
  * Trim "obvious" prose around an S-expression: anything before the first `(`
  * and anything after the position where the outermost expression closes.
  *
- * Only operates when there is exactly one outermost balanced expression — if
- * the model emitted two side-by-side `(expr1)(expr2)` we leave them alone
- * (the caller's parser will report it; we should not silently pick one).
+ * Refuses to strip a side that contains any Nucleus syntax character —
+ * `(`, `[`, `]`, `"`, `⊗`. Without this guard we'd silently delete real
+ * intent: an unbalanced constraint prefix like `[type=string ⊗ (expr)`
+ * would lose its constraint, or a chained `(expr1)(expr2)` would lose
+ * the second expression. Per the project rule (correctness > token cost),
+ * we'd rather fall through to LLM retry than mangle the query.
  */
 function stripSurroundingProse(
   input: string,
   inString: boolean[]
 ): { stripped: string; changed: boolean; leading: boolean; trailing: boolean } {
+  // Characters that, if found in the candidate prose region, mean the
+  // region is *not* mere prose — could be an unclosed constraint, a
+  // stray string literal, or another expression. Refuse to strip.
+  const NUCLEUS_SYNTAX_CHARS = /[()[\]"⊗]/;
   // Locate the first non-string `(`.
   let firstOpen = -1;
   for (let i = 0; i < input.length; i++) {
@@ -115,7 +122,18 @@ function stripSurroundingProse(
     }
   }
 
-  const leading = firstOpen > 0 && input.slice(0, firstOpen).trim().length > 0;
+  const leadingText = firstOpen > 0 ? input.slice(0, firstOpen) : "";
+  const leadingHasProse = leadingText.trim().length > 0;
+  const leadingSafe =
+    leadingHasProse && !NUCLEUS_SYNTAX_CHARS.test(leadingText);
+  // If the leading region has prose but also contains Nucleus syntax,
+  // it's not safely strippable — bail entirely so neither side is
+  // touched (we don't want to half-repair into an even more confusing
+  // shape for the caller).
+  if (leadingHasProse && !leadingSafe) {
+    return { stripped: input, changed: false, leading: false, trailing: false };
+  }
+  const leading = leadingSafe;
 
   if (outerClose === -1) {
     // Unclosed outermost expression — only strip leading prose. Trailing
@@ -132,9 +150,17 @@ function stripSurroundingProse(
     };
   }
 
-  const trailing =
-    outerClose < input.length - 1 &&
-    input.slice(outerClose + 1).trim().length > 0;
+  const trailingText =
+    outerClose < input.length - 1 ? input.slice(outerClose + 1) : "";
+  const trailingHasProse = trailingText.trim().length > 0;
+  const trailingSafe =
+    trailingHasProse && !NUCLEUS_SYNTAX_CHARS.test(trailingText);
+  if (trailingHasProse && !trailingSafe) {
+    // Trailing region looks like another expression / quoted text — don't
+    // silently drop it.
+    return { stripped: input, changed: false, leading: false, trailing: false };
+  }
+  const trailing = trailingSafe;
 
   if (!leading && !trailing) {
     return { stripped: input, changed: false, leading: false, trailing: false };
@@ -161,7 +187,6 @@ function bracketBalance(
 ): { parens: number; brackets: number; trailingExtraParens: number; trailingExtraBrackets: number } | null {
   let parens = 0;
   let brackets = 0;
-  let lastSafePos = 0;
   let trailingExtraParens = 0;
   let trailingExtraBrackets = 0;
 
@@ -213,9 +238,7 @@ function bracketBalance(
         return null;
       }
     }
-    if (parens >= 0 && brackets >= 0) lastSafePos = i;
   }
-  void lastSafePos; // reserved for future surgical trims
   return { parens, brackets, trailingExtraParens, trailingExtraBrackets };
 }
 
@@ -250,9 +273,7 @@ export function lintAndRepair(input: string): LintResult {
   const balance = bracketBalance(current, inString);
   if (balance === null) {
     // Stray mid-expression closer — don't guess.
-    return repairs.length > 0
-      ? { repaired: null, repairs: [] }
-      : { repaired: null, repairs: [] };
+    return { repaired: null, repairs: [] };
   }
 
   // Strip trailing surplus closers.

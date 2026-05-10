@@ -27,7 +27,7 @@ describe("lc-linter", () => {
       const r = lintAndRepair(broken);
       expect(r.repaired).toBe('(grep "ERROR")');
       expect(reparses(r.repaired!)).toBe(true);
-      expect(r.repairs.some((s) => /paren/i.test(s))).toBe(true);
+      expect(r.repairs.some((s: string) => /paren/i.test(s))).toBe(true);
     });
 
     it("appends multiple missing close parens", () => {
@@ -37,13 +37,17 @@ describe("lc-linter", () => {
       expect(reparses(r.repaired!)).toBe(true);
     });
 
-    it("appends missing close brackets", () => {
-      const broken = "[type=string ⊗ (grep \"x\")";
+    it("does NOT silently strip an unclosed constraint prefix", () => {
+      // [type=string ⊗ (grep "x") — bracket on the left is unclosed and
+      // looks like Nucleus constraint syntax. We must NOT strip it as
+      // "prose" because that would silently lose user intent. The
+      // linter has to either repair the whole thing or return null.
+      const broken = '[type=string ⊗ (grep "x")';
       const r = lintAndRepair(broken);
-      // Either the linter repairs it or returns null — but if returned,
-      // it must reparse.
       if (r.repaired !== null) {
-        expect(reparses(r.repaired)).toBe(true);
+        // Repair allowed only if the result still contains the bracket
+        // prefix — never just the inner expression.
+        expect(r.repaired).toMatch(/\[type=string/);
       }
     });
   });
