@@ -809,4 +809,42 @@ describe("Source-pattern checks (from audits)", () => {
       });
     });
 
+  describe("linter / mechanical repair on parse failure", () => {
+    function freshEngine(): NucleusEngine {
+      const e = new NucleusEngine();
+      e.loadContent(SAMPLE_DOCUMENT);
+      return e;
+    }
+
+    it("executes successfully when missing a trailing ')'", async () => {
+      // The model emitted (grep "FATAL" missing its close — the engine
+      // should mechanically balance it and run the query.
+      const result = await freshEngine().execute('(grep "FATAL"');
+      expect(result.success).toBe(true);
+      expect(Array.isArray(result.value)).toBe(true);
+      expect((result.value as unknown[]).length).toBeGreaterThan(0);
+      expect(result.logs.some((l: string) => /linter/.test(l))).toBe(true);
+    });
+
+    it("executes successfully when prose wraps the expression", async () => {
+      const result = await freshEngine().execute('Here it is: (count (grep "INFO")) — done');
+      expect(result.success).toBe(true);
+      expect(result.value).toBe(3);
+      expect(result.logs.some((l: string) => /linter/.test(l))).toBe(true);
+    });
+
+    it("does not log a repair when input is already valid", async () => {
+      const result = await freshEngine().execute('(count (grep "INFO"))');
+      expect(result.success).toBe(true);
+      expect(result.logs.some((l: string) => /linter/.test(l))).toBe(false);
+    });
+
+    it("still reports parse error when query is unrepairable", async () => {
+      // Unterminated string — the linter declines.
+      const result = await freshEngine().execute('(grep "ERROR');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Parse error/);
+    });
+  });
+
 });

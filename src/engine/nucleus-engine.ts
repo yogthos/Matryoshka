@@ -10,6 +10,7 @@
 
 import { readFile } from "node:fs/promises";
 import { parse as parseLC } from "../logic/lc-parser.js";
+import { lintAndRepair } from "../logic/lc-linter.js";
 import { inferType, typeToString } from "../logic/type-inference.js";
 import { solve as solveTerm, validateRegex, type SolverTools, type Bindings } from "../logic/lc-solver.js";
 import { buildBM25Index, searchBM25, type BM25Index } from "../logic/bm25.js";
@@ -382,8 +383,32 @@ export class NucleusEngine {
       };
     }
 
-    // Parse the LC term
-    const parseResult = parseLC(command);
+    // Parse the LC term — fall back to a mechanical repair pass for the
+    // common LLM near-misses (missing/extra trailing parens, prose
+    // wrapping the expression) before reporting a parse error. We also
+    // attempt repair when parse succeeded but left `remaining` tokens
+    // unconsumed — that's almost always prose around the expression
+    // (the parser would otherwise return a meaningless one-symbol term
+    // like `var "Here"` from "Here it is: (count …)"). The repaired
+    // form must reparse cleanly AND with no remaining tokens; otherwise
+    // the original outcome is preserved.
+    let parseResult = parseLC(command);
+    const repairLogs: string[] = [];
+    const parseIsClean =
+      parseResult.success && !!parseResult.term && !parseResult.remaining;
+    if (!parseIsClean) {
+      const lint = lintAndRepair(command);
+      if (lint.repaired !== null) {
+        const repaired = parseLC(lint.repaired);
+        if (repaired.success && repaired.term && !repaired.remaining) {
+          repairLogs.push(`linter: ${lint.repairs.join("; ")}`);
+          if (this.verbose) {
+            console.log(`[Engine] Linter repaired query (${lint.repairs.join("; ")})`);
+          }
+          parseResult = repaired;
+        }
+      }
+    }
     if (!parseResult.success || !parseResult.term) {
       return {
         success: false,
@@ -444,7 +469,7 @@ export class NucleusEngine {
     return {
       success: solverResult.success,
       value: solverResult.value,
-      logs: solverResult.logs,
+      logs: repairLogs.length > 0 ? [...repairLogs, ...solverResult.logs] : solverResult.logs,
       error: solverResult.error,
       type: typeResult.type ? typeToString(typeResult.type) : undefined,
     };
