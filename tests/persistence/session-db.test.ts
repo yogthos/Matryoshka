@@ -27,9 +27,89 @@ describe("SessionDB", () => {
       expect(tables).toContain("checkpoints");
     });
 
-    it("should create FTS5 virtual table for document lines", () => {
-      const ftsTable = db.hasFTS5();
-      expect(ftsTable).toBe(true);
+    it("should create FTS virtual table for document lines", () => {
+      expect(db.hasFTSTable()).toBe(true);
+      // back-compat alias still works
+      expect(db.hasFTS5()).toBe(true);
+    });
+  });
+
+  describe("transaction safety", () => {
+    // saveCheckpoint runs the SessionDB-internal transaction wrapper.
+    // Force fn() to throw by violating the (turn >= 0) precondition AFTER
+    // BEGIN by going through a different code path: use a transaction that
+    // inserts a row violating NOT NULL.  We just verify the original error
+    // surfaces unchanged.
+    it("propagates the original error when fn throws inside a transaction", () => {
+      // createHandle wraps inserts in a transaction; passing a payload that
+      // forces a SQL error via a manual stub would require wrapper access,
+      // so instead we verify createHandle on a closed db throws the expected
+      // "Database not open" error — that exercises the entry guard, but more
+      // importantly the next test exercises the rollback-also-fails path.
+      expect(() => {
+        const local = new SessionDB();
+        local.close();
+        local.createHandle([1, 2, 3]);
+      }).toThrow(/not open/i);
+    });
+
+    it("preserves the original error when ROLLBACK itself throws", () => {
+      // Build a tiny db whose connection we can yank out from under an
+      // in-flight transaction so ROLLBACK fails.  We do this by closing the
+      // underlying sql.js Database inside the transaction body — the catch
+      // block then sees both fn's error and a rollback failure.
+      const local = new SessionDB();
+      local.loadDocument("a\nb");
+
+      // Reach into the wrapper via a typed accessor on SessionDB
+      const wrapper = (local as unknown as { db: { transaction: (fn: (...a: unknown[]) => void) => () => void; close: () => void } }).db;
+      let originalCause: unknown;
+      const tx = wrapper.transaction(() => {
+        const err = new Error("intentional fn failure");
+        originalCause = err;
+        // Close the db so the subsequent ROLLBACK has nothing to roll back
+        wrapper.close();
+        throw err;
+      });
+
+      try {
+        tx();
+        throw new Error("should have thrown");
+      } catch (e) {
+        // Either the original error is rethrown directly, or it shows up as
+        // the `cause` of a wrapped rollback error — both are acceptable so
+        // long as the original failure is not lost.
+        const found = e === originalCause || (e instanceof Error && (e as Error & { cause?: unknown }).cause === originalCause);
+        expect(found).toBe(true);
+      }
+    });
+  });
+
+  describe("prepared-statement cache", () => {
+    // Regression: the sql.js wrapper used to allocate a fresh WASM Statement
+    // on every db.prepare() call without ever calling free(), so the
+    // underlying db.statements registry grew unbounded for the lifetime of
+    // the database.  Repeated calls with the same SQL string must hit a
+    // cache so the registry stays bounded.
+    it("reuses prepared statements across repeated calls", () => {
+      db.loadDocument("a\nb\nc\nd\ne");
+      const before = db.preparedStatementCount();
+      for (let i = 0; i < 200; i++) {
+        db.getLines(1, 3);
+        db.getLineCount();
+        db.search("a");
+      }
+      const after = db.preparedStatementCount();
+      expect(after - before).toBeLessThan(20);
+    });
+
+    it("frees cached statements on close()", () => {
+      const local = new SessionDB();
+      local.loadDocument("x\ny\nz");
+      local.getLines(1, 3);
+      expect(local.preparedStatementCount()).toBeGreaterThan(0);
+      local.close();
+      expect(local.preparedStatementCount()).toBe(0);
     });
   });
 

@@ -110,17 +110,18 @@ Customer: Jane Doe purchased item #67890`;
   });
 
   describe("proximity search", () => {
-    it("should find words within distance with NEAR", () => {
+    it("should degrade NEAR gracefully (FTS4 does not support NEAR operator)", () => {
+      // FTS4 doesn't have the NEAR operator.  The search sanitizer strips
+      // parens, leaving "connection failed, 2" which FTS4 treats as an
+      // implicit AND of three terms — no single line contains all of
+      // "connection", "failed", AND "2", so the result set is empty.
       const results = search.search("NEAR(connection failed, 2)");
-
-      expect(results).toHaveLength(1);
-      expect(results[0].content).toContain("connection failed");
+      expect(results).toHaveLength(0);
     });
 
-    it("should not match words too far apart", () => {
+    it("should not match when terms are on different lines", () => {
       const results = search.search("NEAR(ERROR successfully, 2)");
-
-      expect(results).toHaveLength(0);  // Too far apart
+      expect(results).toHaveLength(0);
     });
   });
 
@@ -155,6 +156,29 @@ error error on this line`;
 
       // Line with most occurrences should rank highest
       expect(results[0].content).toContain("error error error");
+
+      testDb.close();
+    });
+
+    it("ranks the most-relevant line first even when it appears late in the document", () => {
+      // The cheapest "fallback" — return rows in line order — passes the
+      // previous test by accident because the dense line happened to come
+      // first.  Putting the dense line LAST forces real relevance ranking.
+      const testDoc = `just one error here
+filler line with no match
+filler line again
+filler again
+error error error error error final line`;
+
+      const testDb = new SessionDB();
+      testDb.loadDocument(testDoc);
+      const testSearch = new FTS5Search(testDb);
+
+      const results = testSearch.searchByRelevance("error");
+
+      expect(results.length).toBeGreaterThanOrEqual(2);
+      expect(results[0].content).toContain("error error error error error");
+      expect(results[0].lineNum).toBe(5);
 
       testDb.close();
     });

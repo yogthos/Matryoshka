@@ -2,14 +2,182 @@
  * SessionDB - In-memory SQLite database for session state
  *
  * Provides:
- * - FTS5 full-text search for document lines
+ * - FTS4 full-text search for document lines
  * - Handle storage for result sets
  * - Checkpoint persistence for session resume
  * - Symbol storage for tree-sitter extracted symbols
+ *
+ * Uses sql.js (WASM-based SQLite, zero native dependencies) instead of
+ * better-sqlite3 to avoid the deprecated prebuild-install dependency.
  */
 
-import Database from "better-sqlite3";
+import initSqlJs from "sql.js";
 import type { Symbol, SymbolKind } from "../treesitter/types.js";
+import { buildBM25Index, searchBM25, type BM25Index } from "../logic/bm25.js";
+
+// ---------------------------------------------------------------------------
+// sql.js wrapper layer — mimics the better-sqlite3 API surface used by
+// SessionDB so the rest of the class needs minimal changes.
+// ---------------------------------------------------------------------------
+
+type SqlValue = number | string | Uint8Array | null;
+
+interface SqlJsQueryExecResult {
+  columns: string[];
+  values: SqlValue[][];
+}
+
+interface SqlJsDatabaseLike {
+  exec(sql: string, params?: SqlValue[]): SqlJsQueryExecResult[];
+  run(sql: string, params?: SqlValue[]): void;
+  prepare(sql: string, params?: SqlValue[]): SqlJsStatementLike;
+  close(): void;
+}
+
+interface SqlJsStatementLike {
+  bind(values?: SqlValue[]): boolean;
+  step(): boolean;
+  getAsObject(): Record<string, SqlValue>;
+  run(values?: SqlValue[]): void;
+  free(): boolean;
+}
+
+/**
+ * Wraps a sql.js prepared statement so it exposes the same .all(), .get(),
+ * .run() API as better-sqlite3.  A single PreparedStmt is cached per SQL
+ * string by DbWrapper and reused across calls — bind() resets the statement
+ * so this is safe.
+ */
+class PreparedStmt {
+  private stmt: SqlJsStatementLike;
+
+  constructor(stmt: SqlJsStatementLike) {
+    this.stmt = stmt;
+  }
+
+  all(...params: SqlValue[]): unknown[] {
+    this.stmt.bind(params.length > 0 ? params : undefined);
+    const results: unknown[] = [];
+    while (this.stmt.step()) {
+      results.push(this.stmt.getAsObject());
+    }
+    return results;
+  }
+
+  get(...params: SqlValue[]): unknown {
+    this.stmt.bind(params.length > 0 ? params : undefined);
+    return this.stmt.step() ? this.stmt.getAsObject() : undefined;
+  }
+
+  run(...params: SqlValue[]): void {
+    this.stmt.run(params.length > 0 ? params : undefined);
+  }
+
+  free(): void {
+    this.stmt.free();
+  }
+}
+
+/**
+ * Wraps a sql.js Database so it exposes the same .prepare(), .exec(),
+ * .run(), .pragma(), .transaction(), .close() API as better-sqlite3.
+ *
+ * Prepared statements are cached by SQL string so repeated queries reuse
+ * the same WASM Statement — otherwise sql.js leaks memory because every
+ * prepare() allocates a Statement that's only freed by db.close().
+ */
+class DbWrapper {
+  private db: SqlJsDatabaseLike;
+  private _open: boolean;
+  private stmtCache: Map<string, PreparedStmt> = new Map();
+
+  constructor() {
+    this.db = new SQL.Database();
+    this._open = true;
+  }
+
+  prepare(sql: string): PreparedStmt {
+    const cached = this.stmtCache.get(sql);
+    if (cached) return cached;
+    const stmt = new PreparedStmt(this.db.prepare(sql));
+    this.stmtCache.set(sql, stmt);
+    return stmt;
+  }
+
+  /** Number of cached prepared statements (for tests / observability). */
+  preparedStatementCount(): number {
+    return this.stmtCache.size;
+  }
+
+  /** Execute one or more SQL statements, ignoring any returned rows. */
+  exec(sql: string): void {
+    this.db.exec(sql);
+  }
+
+  /** Execute a single SQL statement, ignoring any returned rows. */
+  run(sql: string): void {
+    this.db.run(sql);
+  }
+
+  /** Return the rowid of the last INSERT (convenience wrapper). */
+  getLastInsertRowid(): number {
+    const rows = this.db.exec("SELECT last_insert_rowid()");
+    return (rows[0]?.values[0]?.[0] as number) ?? 0;
+  }
+
+  /** Set a PRAGMA. */
+  pragma(pragmaSql: string): void {
+    this.db.run(`PRAGMA ${pragmaSql}`);
+  }
+
+  /**
+   * Wrap a function so it executes inside a BEGIN / COMMIT / ROLLBACK
+   * transaction — identical semantics to better-sqlite3's db.transaction().
+   *
+   * If ROLLBACK itself throws (e.g. the connection was closed mid-tx), we
+   * preserve the original error from fn() as the .cause of the wrapper
+   * error so the root cause is never silently lost.
+   */
+  transaction<T extends (...args: any[]) => void>(fn: T): T {
+    return ((...args: any[]) => {
+      this.db.run("BEGIN");
+      try {
+        fn(...args);
+        this.db.run("COMMIT");
+      } catch (e) {
+        try {
+          this.db.run("ROLLBACK");
+        } catch (rollbackErr) {
+          throw new Error(
+            `Transaction failed and ROLLBACK also failed: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
+            { cause: e },
+          );
+        }
+        throw e;
+      }
+    }) as T;
+  }
+
+  close(): void {
+    if (this._open) {
+      for (const stmt of this.stmtCache.values()) {
+        try { stmt.free(); } catch { /* ignore — db.close() frees anyway */ }
+      }
+      this.stmtCache.clear();
+      this.db.close();
+      this._open = false;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level sql.js initialisation (top-level await – ESM only, Node ≥20).
+// ---------------------------------------------------------------------------
+const SQL = await initSqlJs();
+
+// ---------------------------------------------------------------------------
+// Public interfaces
+// ---------------------------------------------------------------------------
 
 export interface DocumentLine {
   lineNum: number;
@@ -82,15 +250,24 @@ export interface LoadStatus {
   storedLines: number;
 }
 
+// ---------------------------------------------------------------------------
+// SessionDB
+// ---------------------------------------------------------------------------
+
 export class SessionDB {
-  private db: Database.Database | null;
+  private db: DbWrapper | null;
   private lastLoadStatus: LoadStatus = { truncated: false, storedLines: 0 };
   /** Tracks usage count per slug base for collision disambiguation */
   private slugCounts: Map<string, number> = new Map();
+  // BM25 index over the currently loaded document, lazily built on the
+  // first relevance-ranked search and invalidated whenever the document is
+  // replaced.  sql.js bundles FTS3/4 but not FTS5's bm25 ranker, so we
+  // compute scoring in JS.
+  private bm25Lines: string[] | null = null;
+  private bm25Index: BM25Index | null = null;
 
   constructor() {
-    // Create in-memory database
-    this.db = new Database(":memory:");
+    this.db = new DbWrapper();
     this.db.pragma("foreign_keys = ON");
     this.initSchema();
   }
@@ -98,32 +275,17 @@ export class SessionDB {
   private initSchema(): void {
     if (!this.db) return;
 
-    // Document lines table with FTS5
+    // Document lines table with FTS4 (sql.js bundles FTS3/4 but not FTS5)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS document_lines (
         lineNum INTEGER PRIMARY KEY,
         content TEXT NOT NULL
       );
 
-      CREATE VIRTUAL TABLE IF NOT EXISTS document_lines_fts USING fts5(
+      CREATE VIRTUAL TABLE IF NOT EXISTS document_lines_fts USING fts4(
         content,
-        content='document_lines',
-        content_rowid='lineNum'
+        content='document_lines'
       );
-
-      -- Triggers to keep FTS in sync
-      CREATE TRIGGER IF NOT EXISTS document_lines_ai AFTER INSERT ON document_lines BEGIN
-        INSERT INTO document_lines_fts(rowid, content) VALUES (new.lineNum, new.content);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS document_lines_ad AFTER DELETE ON document_lines BEGIN
-        INSERT INTO document_lines_fts(document_lines_fts, rowid, content) VALUES('delete', old.lineNum, old.content);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS document_lines_au AFTER UPDATE ON document_lines BEGIN
-        INSERT INTO document_lines_fts(document_lines_fts, rowid, content) VALUES('delete', old.lineNum, old.content);
-        INSERT INTO document_lines_fts(rowid, content) VALUES (new.lineNum, new.content);
-      END;
 
       -- Handles registry
       CREATE TABLE IF NOT EXISTS handles (
@@ -176,6 +338,11 @@ export class SessionDB {
     return this.db !== null;
   }
 
+  /** Number of cached prepared statements (for tests / observability). */
+  preparedStatementCount(): number {
+    return this.db?.preparedStatementCount() ?? 0;
+  }
+
   /**
    * Get list of tables in database
    */
@@ -191,9 +358,12 @@ export class SessionDB {
   }
 
   /**
-   * Check if FTS5 virtual table exists
+   * Check if the FTS virtual table exists.
+   *
+   * Note: under sql.js the table is FTS4, not FTS5 (sql.js doesn't ship FTS5).
+   * The name is kept for backwards-compatibility with existing callers.
    */
-  hasFTS5(): boolean {
+  hasFTSTable(): boolean {
     if (!this.db) return false;
     const stmt = this.db.prepare(`
       SELECT name FROM sqlite_master
@@ -203,21 +373,25 @@ export class SessionDB {
     return row !== undefined;
   }
 
+  /** @deprecated Use hasFTSTable() — kept for backwards compatibility. */
+  hasFTS5(): boolean {
+    return this.hasFTSTable();
+  }
+
   /**
-   * Load document content into the database
+   * Load document content into the database.
+   *
+   * FTS4 external-content tables need a manual index rebuild after the
+   * content table is modified, unlike FTS5 triggers.  We run the rebuild
+   * inside the same atomic transaction so readers never see a stale index.
    */
   loadDocument(content: string): number {
     if (!this.db) {
       this.lastLoadStatus = { truncated: false, storedLines: 0 };
       return 0;
     }
-
-    // Handle empty document
-    if (!content) {
-      this.db.exec("DELETE FROM document_lines");
-      this.lastLoadStatus = { truncated: false, storedLines: 0 };
-      return 0;
-    }
+    this.bm25Lines = null;
+    this.bm25Index = null;
 
     const originalLength = content.length;
     let truncated = false;
@@ -231,9 +405,14 @@ export class SessionDB {
       reason = `content size ${originalLength} exceeded MAX_CONTENT_SIZE (${MAX_CONTENT_SIZE} bytes)`;
     }
 
-    // Pre-fix this method silently dropped overflow content. Now we
-    // surface it via lastLoadStatus so callers and operators can tell
-    // when a downstream query is operating on incomplete data.
+    // Handle empty document
+    if (!content) {
+      this.db.exec("DELETE FROM document_lines");
+      this.db.exec("DELETE FROM document_lines_fts");
+      this.lastLoadStatus = { truncated: false, storedLines: 0 };
+      return 0;
+    }
+
     const MAX_LINES = 500_000;
     const allLines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n", MAX_LINES + 1);
     let lines = allLines;
@@ -247,15 +426,21 @@ export class SessionDB {
       "INSERT INTO document_lines (lineNum, content) VALUES (?, ?)"
     );
 
-    // Wrap DELETE + INSERT in the same transaction for atomicity
+    // Wrap content replacement + FTS rebuild in one atomic transaction.
+    // FTS4 external-content tables need a manual rebuild via the special
+    // 'rebuild' command after the content table is modified.
     const replaceAll = this.db.transaction((lines: string[]) => {
       this.db!.exec("DELETE FROM document_lines");
       for (let i = 0; i < lines.length; i++) {
         insert.run(i + 1, lines[i]);
       }
+      // Rebuild FTS index from the content table
+      this.db!.exec("DELETE FROM document_lines_fts");
+      this.db!.exec("INSERT INTO document_lines_fts(document_lines_fts) VALUES('rebuild')");
     });
 
     replaceAll(lines);
+    this.bm25Lines = lines;
 
     this.lastLoadStatus = {
       truncated,
@@ -271,8 +456,6 @@ export class SessionDB {
 
   /**
    * Truncation metadata from the most recent loadDocument() call.
-   * Callers can use this to warn the user when a downstream query
-   * may be operating on incomplete data.
    */
   getLastLoadStatus(): LoadStatus {
     return this.lastLoadStatus;
@@ -308,15 +491,13 @@ export class SessionDB {
   }
 
   /**
-   * Search document using FTS5
+   * Search document using FTS (sanitizes user input)
    */
   search(query: string): DocumentLine[] {
     if (!this.db) return [];
     const MAX_QUERY_LENGTH = 10_000;
     if (query.length > MAX_QUERY_LENGTH) query = query.slice(0, MAX_QUERY_LENGTH);
 
-    // Sanitize FTS5 special characters to prevent query injection
-    // Strips: quotes, wildcards, grouping, column selectors, boolean ops, prefix tokens
     const sanitized = query.replace(/['"*()\-|{}:^~\[\]+@/\\]/g, " ").replace(/\b(AND|OR|NOT|NEAR)\b/gi, " ").trim();
     if (!sanitized) return [];
 
@@ -324,7 +505,7 @@ export class SessionDB {
   }
 
   /**
-   * Search with a raw FTS5 query (for trusted internal callers only)
+   * Search with a raw FTS query (for trusted internal callers only)
    * WARNING: Do not pass user input directly to this method
    */
   searchRaw(query: string): DocumentLine[] {
@@ -332,7 +513,6 @@ export class SessionDB {
     if (!query.trim()) return [];
 
     const MAX_SEARCH_RESULTS = 100_000;
-    // Use FTS5 MATCH query
     const stmt = this.db.prepare(`
       SELECT d.lineNum, d.content
       FROM document_lines d
@@ -345,44 +525,34 @@ export class SessionDB {
     try {
       return stmt.all(query, MAX_SEARCH_RESULTS) as DocumentLine[];
     } catch (err) {
-      console.error("[SessionDB] FTS5 query failed:", err instanceof Error ? err.message : String(err));
+      console.error("[SessionDB] FTS query failed:", err instanceof Error ? err.message : String(err));
       return [];
     }
   }
 
   /**
-   * Search with FTS5 BM25 relevance ranking (server-side scoring)
+   * Search with BM25 relevance ranking.
+   *
+   * sql.js bundles FTS3/4 but not FTS5, and FTS4's matchinfo() doesn't give
+   * us a real ranker out of the box.  We score in JS using the BM25 index
+   * that's lazily built from the line cache populated by loadDocument().
    */
   searchByRelevance(query: string): DocumentLine[] {
     if (!this.db) return [];
     if (!query.trim()) return [];
+    if (!this.bm25Lines || this.bm25Lines.length === 0) return [];
+
+    if (!this.bm25Index) {
+      this.bm25Index = buildBM25Index(this.bm25Lines);
+    }
 
     const MAX_SEARCH_RESULTS = 100_000;
-    const stmt = this.db.prepare(`
-      SELECT d.lineNum, d.content
-      FROM document_lines_fts f
-      JOIN document_lines d ON d.lineNum = f.rowid
-      WHERE document_lines_fts MATCH ?
-      ORDER BY bm25(document_lines_fts)
-      LIMIT ?
-    `);
-
-    try {
-      return stmt.all(query, MAX_SEARCH_RESULTS) as DocumentLine[];
-    } catch (err) {
-      console.error("[SessionDB] FTS5 relevance query failed:", err instanceof Error ? err.message : String(err));
-      return this.searchRaw(query);
-    }
+    const ranked = searchBM25(query, this.bm25Lines, this.bm25Index, undefined, MAX_SEARCH_RESULTS);
+    return ranked.map((r) => ({ lineNum: r.lineNum, content: r.line }));
   }
 
   /**
    * Generate a unique handle name for a slug.
-   *
-   * Increments the per-slug counter and checks the candidate name against
-   * existing handles in SQLite. If a cross-slug collision is detected
-   * (e.g. slug "grep_error" count=2 produces "$grep_error_2" which was
-   * already taken by slug "grep_error_2" count=1), keeps incrementing
-   * until a free name is found.
    */
   private nextUniqueHandle(slug: string): string {
     const checkExists = this.db!.prepare("SELECT 1 FROM handles WHERE handle = ?");
@@ -395,17 +565,11 @@ export class SessionDB {
         return candidate;
       }
     }
-    // Fallback: should never happen in practice
     return `$${slug}_${Date.now()}`;
   }
 
   /**
    * Create a handle for storing data array.
-   *
-   * @param data    The array payload to store.
-   * @param command Optional Nucleus command string used to derive a
-   *                descriptive handle name (e.g. `(grep "ERROR")` → `$grep_error`).
-   *                Falls back to `$res`, `$res_2`, … when omitted.
    */
   createHandle(data: unknown[], command?: string): string {
     if (!this.db) throw new Error("Database not open");
@@ -419,7 +583,6 @@ export class SessionDB {
     const handle = this.nextUniqueHandle(slug);
     const now = Date.now();
 
-    // Insert handle metadata and data rows atomically in one transaction
     const insertHandle = this.db.prepare(`
       INSERT INTO handles (handle, type, count, created_at)
       VALUES (?, ?, ?, ?)
@@ -435,7 +598,6 @@ export class SessionDB {
         try {
           insertData.run(handle, i, JSON.stringify(items[i]));
         } catch {
-          // Skip non-serializable items (circular refs, BigInt, etc.)
           insertData.run(handle, i, "null");
         }
       }
@@ -447,12 +609,6 @@ export class SessionDB {
 
   /**
    * Create a memo handle for storing arbitrary context.
-   * Uses $memo prefix and "memo" type to distinguish from query result handles.
-   *
-   * @param data  The array payload to store.
-   * @param label Optional label used to derive a descriptive handle name
-   *              (e.g., "auth architecture" → `$memo_auth_architecture`).
-   *              Falls back to `$memo`, `$memo_2`, … when omitted.
    */
   createMemoHandle(data: unknown[], label?: string): string {
     if (!this.db) throw new Error("Database not open");
@@ -462,7 +618,6 @@ export class SessionDB {
       data = data.slice(0, MAX_HANDLE_ITEMS);
     }
 
-    // Derive slug from label, with "memo" prefix to stay in the memo namespace
     let slug = "memo";
     if (label) {
       const labelSlug = label
@@ -504,7 +659,6 @@ export class SessionDB {
 
   /**
    * Delete all non-memo handles (query result handles)
-   * Preserves memo handles across document reloads
    */
   clearQueryHandles(): void {
     if (!this.db) return;
@@ -525,7 +679,7 @@ export class SessionDB {
   }
 
   /**
-   * Get a slice of data stored in a handle (avoids loading all rows)
+   * Get a slice of data stored in a handle
    */
   getHandleDataSlice(handle: string, limit: number, offset: number = 0): unknown[] {
     if (!this.db) return [];
@@ -602,15 +756,6 @@ export class SessionDB {
 
   /**
    * Get the total byte size of a handle's stored JSON rows.
-   *
-   * Sums `length(data)` over the handle_data rows in a single SQL query,
-   * so callers can estimate token costs without re-serializing the whole
-   * array on the JS side. The data is already JSON-stringified in SQLite
-   * (see `createHandle`), so this is the authoritative serialized size
-   * minus the JSON array brackets and commas that would wrap it — close
-   * enough for a token-cost estimate.
-   *
-   * Returns 0 for unknown handles.
    */
   getHandleDataByteSize(handle: string): number {
     if (!this.db) return 0;
@@ -636,7 +781,6 @@ export class SessionDB {
    */
   deleteHandle(handle: string): void {
     if (!this.db) return;
-    // Data will be cascade-deleted due to foreign key
     const stmt = this.db.prepare("DELETE FROM handles WHERE handle = ?");
     stmt.run(handle);
   }
@@ -662,7 +806,7 @@ export class SessionDB {
   }
 
   /**
-   * Get a checkpoint
+   * Get a checkpoint timestamp
    */
   getCheckpointTimestamp(turn: number): number | null {
     if (!this.db) return null;
@@ -758,7 +902,7 @@ export class SessionDB {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    const result = stmt.run(
+    stmt.run(
       symbol.name,
       symbol.kind,
       symbol.startLine,
@@ -769,7 +913,7 @@ export class SessionDB {
       symbol.parentSymbolId ?? null
     );
 
-    return result.lastInsertRowid as number;
+    return this.db.getLastInsertRowid();
   }
 
   /**
@@ -855,12 +999,13 @@ export class SessionDB {
     if (!this.db) return;
     this.db.exec(`
       DELETE FROM document_lines;
+      DELETE FROM document_lines_fts;
       DELETE FROM handles;
       DELETE FROM checkpoints;
       DELETE FROM symbols;
     `);
-    // Don't reset slugCounts — preserves uniqueness and prevents
-    // handle name collisions with previously issued handles
+    this.bm25Lines = null;
+    this.bm25Index = null;
   }
 
   /**
