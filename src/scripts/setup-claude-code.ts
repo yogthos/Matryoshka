@@ -28,7 +28,7 @@ if (isGlobalInstall) {
   console.log("✓ Running from global installation\n");
 } else {
   console.log("Running from local installation\n");
-  console.log("For global access, run: npm install -g matryoshka-rlm\n");
+  console.log("For global access, run: pnpm add -g matryoshka-rlm\n");
 }
 
 console.log("═══════════════════════════════════════════════════════════════════");

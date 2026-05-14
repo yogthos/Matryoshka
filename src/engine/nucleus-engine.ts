@@ -479,7 +479,6 @@ export class NucleusEngine {
    * Evict oldest turn bindings (_N) when exceeding the cap
    */
   private evictOldTurnBindings(): void {
-    if (this.turnCounter <= NucleusEngine.MAX_TURN_BINDINGS) return;
     const turnKeys: string[] = [];
     for (const key of this.bindings.keys()) {
       if (/^_\d+$/.test(key)) turnKeys.push(key);

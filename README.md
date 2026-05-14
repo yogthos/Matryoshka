@@ -214,7 +214,7 @@ The LLM never writes JavaScript. It outputs Nucleus commands that Lattice execut
 Install from npm:
 
 ```bash
-npm install -g matryoshka-rlm
+pnpm add -g matryoshka-rlm
 ```
 
 Or run without installing:
@@ -242,8 +242,8 @@ The package provides several CLI tools:
 ```bash
 git clone https://github.com/yogthos/Matryoshka.git
 cd Matryoshka
-npm install
-npm run build
+pnpm install
+pnpm run build
 ```
 
 ## Configuration
@@ -565,13 +565,13 @@ Matryoshka includes built-in symbol mappings for 20+ languages. To enable a lang
 
 ```bash
 # Enable Rust support
-npm install tree-sitter-rust
+pnpm add tree-sitter-rust
 
 # Enable Java support
-npm install tree-sitter-java
+pnpm add tree-sitter-java
 
 # Enable Ruby support
-npm install tree-sitter-ruby
+pnpm add tree-sitter-ruby
 ```
 
 **Languages with built-in mappings:**
@@ -656,11 +656,11 @@ Results from previous turns are available:
 ## Development
 
 ```bash
-npm test                              # Run tests
-npm test -- --coverage                # With coverage
-RUN_E2E=1 npm test -- tests/e2e.test.ts  # E2E tests (requires Ollama)
-npm run build                         # Build
-npm run typecheck                     # Type check
+pnpm test                              # Run tests
+pnpm test -- --coverage                # With coverage
+RUN_E2E=1 pnpm test -- tests/e2e.test.ts  # E2E tests (requires Ollama)
+pnpm run build                         # Build
+pnpm run typecheck                     # Type check
 ```
 
 ## Acknowledgements

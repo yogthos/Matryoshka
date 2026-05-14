@@ -416,10 +416,10 @@ export interface RLMOptions {
    * Phase 5 — total chars sent to + received from the LLM across
    * all turns (a coarse proxy for token cost; provider-specific
    * tokenization is left to the wire layer). When exceeded, the
-   * loop aborts cleanly with "[aborted: tokens ...]". Default
+   * loop aborts cleanly with "[aborted: chars ...]". Default
    * unset = no cap.
    */
-  maxTokens?: number;
+  maxChars?: number;
   /**
    * Phase 5 — max consecutive code-execution / parse errors
    * before the loop gives up. Catches runaway "the LLM is stuck
@@ -531,7 +531,7 @@ export async function runRLMFromContent(
     subRLMMaxDepth = 0,
     maxConcurrentSubcalls = 4,
     maxTimeoutMs,
-    maxTokens,
+    maxChars,
     maxErrors,
     compactionThresholdChars: rawCompactionThresholdChars,
     onProgress,
@@ -696,7 +696,7 @@ export async function runRLMFromContent(
             subRLMMaxDepth: effectiveMaxDepth,
             _subRLMDepth: childDepth,
             maxTimeoutMs: remainingTimeoutMs(),
-            maxTokens,
+            maxChars,
             maxErrors,
             // Thread progress through nested runs — without this, while
             // a child's FSM is blocking the parent's `handleQueryLLM`,
@@ -758,7 +758,7 @@ export async function runRLMFromContent(
           subRLMMaxDepth: effectiveMaxDepth,
           _subRLMDepth: childDepth,
           maxTimeoutMs: remainingTimeoutMs(),
-          maxTokens,
+          maxChars,
           maxErrors,
           // See subRLMSpawner above — same rationale for nested runs.
           onProgress,
@@ -897,7 +897,7 @@ export async function runRLMFromContent(
       maxTurns,
       log,
       maxTimeoutMs,
-      maxTokens,
+      maxChars,
       maxErrors,
       compactionThresholdChars,
       onProgress,

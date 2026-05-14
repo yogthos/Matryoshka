@@ -292,6 +292,34 @@ function rejectAllPendingQueries(reason: string): void {
   earlySuspension = null;
 }
 
+/**
+ * Reject any pending query or batch whose createdAt timestamp is older
+ * than `maxAgeMs`. Returns the number of entries cleaned up. Called at
+ * the start of every tool handler as a safety net for the rare case
+ * where the session-timeout-driven `rejectAllPendingQueries` path fails
+ * or the `activeExecution` / `suspensionCallback` lifecycle gets
+ * confused. Also exported for regression testing.
+ */
+export function sweepStalePending(maxAgeMs: number): number {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [id, entry] of pendingQueries) {
+    if (now - entry.createdAt > maxAgeMs) {
+      try { entry.reject(new Error("Pending query expired")); } catch { /* ignore */ }
+      pendingQueries.delete(id);
+      cleaned++;
+    }
+  }
+  for (const [id, entry] of pendingBatches) {
+    if (now - entry.createdAt > maxAgeMs) {
+      try { entry.reject(new Error("Pending batch expired")); } catch { /* ignore */ }
+      pendingBatches.delete(id);
+      cleaned++;
+    }
+  }
+  return cleaned;
+}
+
 function getSessionInfo(): string {
   if (!session) {
     return "No active session";
@@ -840,6 +868,9 @@ function formatExpandResult(result: {
 
 async function handleToolCall(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
   try {
+    // Sweep any pending queries/batches that outlived their session,
+    // e.g. when closeSession threw silently or the client disconnected.
+    sweepStalePending(SESSION_TIMEOUT_MS + 60_000);
     switch (name) {
       case "lattice_load": {
         const filePath = args.filePath as string;

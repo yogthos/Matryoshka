@@ -91,6 +91,26 @@ describe("fetchWithRetry", () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(3);
   });
 
+  it("should not log full URL with credentials on final failure", async () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+
+    await expect(
+      fetchWithRetry("http://example.com/api?api_key=secret123&other=val", {}, {
+        maxRetries: 1,
+        baseDelayMs: 10,
+      })
+    ).rejects.toThrow("ECONNREFUSED");
+
+    const errorCalls = consoleSpy.mock.calls.map(c => c.join(" "));
+    const urlLogs = errorCalls.filter(c => c.includes("URL:"));
+    for (const log of urlLogs) {
+      expect(log).not.toMatch(/api_key=secret123/);
+      expect(log).not.toMatch(/secret123/);
+    }
+    consoleSpy.mockRestore();
+  });
+
   it("should pass request options through to fetch", async () => {
     const mockResponse = new Response("ok", { status: 200 });
     globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);

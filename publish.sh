@@ -1,3 +1,3 @@
 #!/bin/bash
 
-npm login && npm version patch && npm run build && npm run test:run && npm publish
+npm login && pnpm version patch && pnpm run build && pnpm run test:run && pnpm publish
