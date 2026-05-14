@@ -68,7 +68,7 @@ Matryoshka has two execution paths and not every primitive works in both:
 | `(grep "X" haystack)` | ✅ | ✅ |
 | `(show_vars)` | ✅ | ✅ (internal `_<name>` bindings filtered out) |
 | `FINAL_VAR(name)` resolution | ✅ | N/A — MCP returns query results directly |
-| `maxTimeoutMs` / `maxTokens` / `maxErrors` | ✅ | ❌ — MCP has its own session timeout |
+| `maxTimeoutMs` / `maxChars` / `maxErrors` | ✅ | ❌ — MCP has its own session timeout |
 | `compactionThresholdChars` | ✅ | ❌ — MCP doesn't have a multi-turn FSM history |
 
 The resource-limit features remain `runRLM`-only. The recursive primitives (`rlm_query`/`rlm_batch`) work in both paths — the MCP path spawns a child `runRLMFromContent` whose `llmClient` is the same sampling bridge as the parent, so each child turn flows through the existing MCP suspension/sampling protocol.
@@ -135,7 +135,7 @@ All optional. With none set, behavior is unchanged:
 ```typescript
 runRLM(query, file, {
   maxTimeoutMs: 30_000,    // wall-clock cap, propagates to children
-  maxTokens: 100_000,      // cumulative chars sent + received
+  maxChars: 100_000,       // cumulative chars sent + received
   maxErrors: 5,            // consecutive parse/execution errors
   compactionThresholdChars: 50_000,  // summarize history when prompt grows past this
 })
@@ -214,7 +214,7 @@ The LLM never writes JavaScript. It outputs Nucleus commands that Lattice execut
 Install from npm:
 
 ```bash
-npm install -g matryoshka-rlm
+pnpm add -g matryoshka-rlm
 ```
 
 Or run without installing:
@@ -242,8 +242,8 @@ The package provides several CLI tools:
 ```bash
 git clone https://github.com/yogthos/Matryoshka.git
 cd Matryoshka
-npm install
-npm run build
+pnpm install
+pnpm run build
 ```
 
 ## Configuration
@@ -565,13 +565,17 @@ Matryoshka includes built-in symbol mappings for 20+ languages. To enable a lang
 
 ```bash
 # Enable Rust support
-npm install tree-sitter-rust
+pnpm add tree-sitter-rust
 
 # Enable Java support
-npm install tree-sitter-java
+pnpm add tree-sitter-java
 
 # Enable Ruby support
-npm install tree-sitter-ruby
+pnpm add tree-sitter-ruby
+
+# pnpm 10+ blocks install scripts by default — the grammar packages
+# need their native bindings built, so approve them after install:
+pnpm approve-builds
 ```
 
 **Languages with built-in mappings:**
@@ -656,11 +660,11 @@ Results from previous turns are available:
 ## Development
 
 ```bash
-npm test                              # Run tests
-npm test -- --coverage                # With coverage
-RUN_E2E=1 npm test -- tests/e2e.test.ts  # E2E tests (requires Ollama)
-npm run build                         # Build
-npm run typecheck                     # Type check
+pnpm test                              # Run tests
+pnpm test -- --coverage                # With coverage
+RUN_E2E=1 pnpm test -- tests/e2e.test.ts  # E2E tests (requires Ollama)
+pnpm run build                         # Build
+pnpm run typecheck                     # Type check
 ```
 
 ## Acknowledgements

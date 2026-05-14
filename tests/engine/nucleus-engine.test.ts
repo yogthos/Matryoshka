@@ -262,6 +262,28 @@ describe("NucleusEngine", () => {
       expect(bindings._110).toBeDefined();
     });
 
+    it("should use actual _N binding count for eviction, not turnCounter", async () => {
+      // Execute many successful scalar commands. Each increments turnCounter
+      // AND creates an _N binding because every successful execution returns
+      // a non-null value (turnCounter === _N count in practice).
+      for (let i = 0; i < 110; i++) {
+        await engine.execute('(count (grep "FATAL"))');
+      }
+      // turnCounter = 110, _N keys = 110.
+      // After eviction, only the 100 newest should survive.
+
+      const bindings = engine.getBindings();
+
+      // Oldest 10 should be evicted: _1 through _10
+      expect(bindings._1).toBeUndefined();
+      expect(bindings._10).toBeUndefined();
+
+      // Newest 100 should survive: _11 through _110
+      expect(bindings._11).toBeDefined();
+      expect(bindings._100).toBeDefined();
+      expect(bindings._110).toBeDefined();
+    });
+
     it("should evict numerically oldest keys, not lexicographically first", async () => {
       // Execute 105 queries - should keep _6 through _105 (100 keys)
       for (let i = 0; i < 105; i++) {

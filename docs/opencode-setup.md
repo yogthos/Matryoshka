@@ -7,7 +7,7 @@ This project uses Lattice as a local MCP server so OpenCode can inspect large fi
 Install the package that provides the `lattice-mcp` binary:
 
 ```bash
-npm install -g matryoshka-rlm
+pnpm add -g matryoshka-rlm
 ```
 
 Sanity check:

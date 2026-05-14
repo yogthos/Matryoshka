@@ -416,8 +416,15 @@ export interface RLMOptions {
    * Phase 5 — total chars sent to + received from the LLM across
    * all turns (a coarse proxy for token cost; provider-specific
    * tokenization is left to the wire layer). When exceeded, the
-   * loop aborts cleanly with "[aborted: tokens ...]". Default
+   * loop aborts cleanly with "[aborted: chars ...]". Default
    * unset = no cap.
+   */
+  maxChars?: number;
+  /**
+   * @deprecated Renamed to `maxChars` — the metric was always
+   * characters, never tokens. Still accepted as an alias for one
+   * release cycle so existing callers don't break silently. Prefer
+   * `maxChars` in new code. If both are set, `maxChars` wins.
    */
   maxTokens?: number;
   /**
@@ -531,12 +538,18 @@ export async function runRLMFromContent(
     subRLMMaxDepth = 0,
     maxConcurrentSubcalls = 4,
     maxTimeoutMs,
-    maxTokens,
+    maxChars: rawMaxChars,
     maxErrors,
     compactionThresholdChars: rawCompactionThresholdChars,
     onProgress,
     _subRLMDepth = 0,
   } = options;
+
+  // Back-compat: `maxTokens` is the old name for `maxChars` (the
+  // metric was always chars). Accept either; new field wins. The
+  // deprecated lint is the entire point of this read.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  const maxChars = rawMaxChars ?? options.maxTokens;
 
   // Paper-conformance fix (T1.4): the reference impl enables compaction
   // by default at ~75% of model context. We default-on at 20_000 chars
@@ -696,7 +709,7 @@ export async function runRLMFromContent(
             subRLMMaxDepth: effectiveMaxDepth,
             _subRLMDepth: childDepth,
             maxTimeoutMs: remainingTimeoutMs(),
-            maxTokens,
+            maxChars,
             maxErrors,
             // Thread progress through nested runs — without this, while
             // a child's FSM is blocking the parent's `handleQueryLLM`,
@@ -758,7 +771,7 @@ export async function runRLMFromContent(
           subRLMMaxDepth: effectiveMaxDepth,
           _subRLMDepth: childDepth,
           maxTimeoutMs: remainingTimeoutMs(),
-          maxTokens,
+          maxChars,
           maxErrors,
           // See subRLMSpawner above — same rationale for nested runs.
           onProgress,
@@ -897,7 +910,7 @@ export async function runRLMFromContent(
       maxTurns,
       log,
       maxTimeoutMs,
-      maxTokens,
+      maxChars,
       maxErrors,
       compactionThresholdChars,
       onProgress,

@@ -178,6 +178,49 @@ describe("Phase 6 — failing compaction does not loop forever", () => {
   });
 });
 
+describe("Phase 6 — compaction respects maxTimeoutMs", () => {
+  it("aborts cleanly when summarization hangs past the timeout budget", async () => {
+    // Simulated hanging summarize: the summarization prompt hangs
+    // forever instead of throwing. Without a timeout race, the FSM
+    // would block indefinitely inside compactHistory.
+    let summarizeCalls = 0;
+    let turn = 0;
+    const doc = Array.from(
+      { length: 80 },
+      (_, i) => `X-${i} ${"filler".repeat(20)}`
+    ).join("\n");
+
+    const llm = async (prompt: string): Promise<string> => {
+      if (/Summarize your progress so far/.test(prompt)) {
+        summarizeCalls++;
+        // Hang forever — never resolve.
+        return new Promise<never>(() => {});
+      }
+      turn++;
+      if (turn === 1) return `(grep "X")`;
+      return `<<<FINAL>>>done<<<END>>>`;
+    };
+
+    const start = Date.now();
+    const result = (await runRLMFromContent("scan", doc, {
+      llmClient: llm,
+      adapter: createNucleusAdapter(),
+      maxTurns: 6,
+      ragEnabled: false,
+      compactionThresholdChars: 1500,
+      maxTimeoutMs: 500,
+    })) as string;
+    const elapsed = Date.now() - start;
+
+    expect(typeof result).toBe("string");
+    // Must not hang — timeout should abort.
+    expect(result).toMatch(/aborted.*timeout/i);
+    expect(elapsed).toBeLessThan(2000);
+    // Exactly one summarization attempt (the hang fires once).
+    expect(summarizeCalls).toBe(1);
+  });
+});
+
 describe("Phase 6 — backwards compat", () => {
   it("with no threshold configured, no summarization fires", async () => {
     let summaryCalls = 0;

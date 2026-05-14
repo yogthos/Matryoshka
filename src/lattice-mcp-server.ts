@@ -31,6 +31,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { HandleSession, type HandleResult } from "./engine/handle-session.js";
 import { runRLMFromContent } from "./rlm.js";
@@ -290,6 +291,34 @@ function rejectAllPendingQueries(reason: string): void {
   activeExecution = null;
   suspensionCallback = null;
   earlySuspension = null;
+}
+
+/**
+ * Reject any pending query or batch whose createdAt timestamp is older
+ * than `maxAgeMs`. Returns the number of entries cleaned up. Called at
+ * the start of every tool handler as a safety net for the rare case
+ * where the session-timeout-driven `rejectAllPendingQueries` path fails
+ * or the `activeExecution` / `suspensionCallback` lifecycle gets
+ * confused. Also exported for regression testing.
+ */
+export function sweepStalePending(maxAgeMs: number): number {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [id, entry] of pendingQueries) {
+    if (now - entry.createdAt > maxAgeMs) {
+      try { entry.reject(new Error("Pending query expired")); } catch { /* ignore */ }
+      pendingQueries.delete(id);
+      cleaned++;
+    }
+  }
+  for (const [id, entry] of pendingBatches) {
+    if (now - entry.createdAt > maxAgeMs) {
+      try { entry.reject(new Error("Pending batch expired")); } catch { /* ignore */ }
+      pendingBatches.delete(id);
+      cleaned++;
+    }
+  }
+  return cleaned;
 }
 
 function getSessionInfo(): string {
@@ -840,6 +869,9 @@ function formatExpandResult(result: {
 
 async function handleToolCall(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
   try {
+    // Sweep any pending queries/batches that outlived their session,
+    // e.g. when closeSession threw silently or the client disconnected.
+    sweepStalePending(SESSION_TIMEOUT_MS + 60_000);
     switch (name) {
       case "lattice_load": {
         const filePath = args.filePath as string;
@@ -1492,7 +1524,18 @@ async function main() {
   console.error("[Lattice] Query results return handle stubs for 97%+ token savings");
 }
 
-main().catch((err) => {
-  console.error("[Lattice] Fatal error:", err);
-  process.exit(1);
-});
+// Only auto-start the MCP server when this file is invoked as the entry
+// point (i.e. via the `lattice-mcp` bin). Tests import named helpers
+// like `sweepStalePending` and `makePendingId` from this module — without
+// this guard, every test worker would silently spin up a stdio server
+// connected to its own stdin/stdout, which conflicts with vitest's I/O.
+const isEntryPoint =
+  typeof process.argv[1] === "string" &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isEntryPoint) {
+  main().catch((err) => {
+    console.error("[Lattice] Fatal error:", err);
+    process.exit(1);
+  });
+}

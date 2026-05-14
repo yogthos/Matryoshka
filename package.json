@@ -1,6 +1,6 @@
 {
   "name": "matryoshka-rlm",
-  "version": "0.2.38",
+  "version": "0.2.39",
   "type": "module",
   "description": "Recursive Language Model - Process documents larger than LLM context windows",
   "main": "dist/lib.js",
@@ -50,7 +50,7 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -112,6 +112,23 @@
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^4.0.17"
+  },
+  "packageManager": "pnpm@10.18.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@tree-sitter-grammars/tree-sitter-markdown",
+      "@yogthos/tree-sitter-clojure",
+      "esbuild",
+      "tree-sitter",
+      "tree-sitter-css",
+      "tree-sitter-elixir",
+      "tree-sitter-go",
+      "tree-sitter-html",
+      "tree-sitter-javascript",
+      "tree-sitter-json",
+      "tree-sitter-python",
+      "tree-sitter-typescript"
+    ]
   },
   "engines": {
     "node": ">=20.0.0"

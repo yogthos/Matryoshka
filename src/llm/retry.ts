@@ -17,6 +17,17 @@ const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_DELAY_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+function sanitizeUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 /**
  * Fetch with retry and exponential backoff.
  *
@@ -45,7 +56,7 @@ export async function fetchWithRetry(
       const errMsg = error instanceof Error ? error.message : String(error);
       if (attempt === maxRetries) {
         console.error(`Final fetch attempt failed: ${errMsg}`);
-        console.error(`URL: ${url}`);
+        console.error(`URL: ${sanitizeUrl(url)}`);
         throw error;
       }
       const delay = baseDelayMs * Math.pow(2, attempt - 1);

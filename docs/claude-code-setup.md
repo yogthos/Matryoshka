@@ -10,7 +10,7 @@ MCP servers run as persistent subprocesses, so they **do maintain state** betwee
 
 ```bash
 # Install globally
-npm install -g matryoshka-rlm
+pnpm add -g matryoshka-rlm
 
 # Or use npx (no install needed)
 npx matryoshka-rlm

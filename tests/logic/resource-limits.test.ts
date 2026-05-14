@@ -1,7 +1,7 @@
 /**
  * Phase 5 — resource limits.
  *
- * Adds maxTimeoutMs, maxTokens, and maxErrors to RLMOptions. When a
+ * Adds maxTimeoutMs, maxChars, and maxErrors to RLMOptions. When a
  * limit is hit, the run terminates cleanly and returns a STRING that
  * embeds the best partial answer found so far rather than letting the
  * loop spiral. Backwards-compatible: with no limit set, behavior is
@@ -10,7 +10,7 @@
  * Coverage:
  *   1. maxTimeoutMs: a slow scripted LLM is interrupted near the cap;
  *      result includes "[aborted: timeout" and the best partial.
- *   2. maxTokens: cumulative chars (proxy for tokens) crossing the
+ *   2. maxChars: cumulative chars (proxy for tokens) crossing the
  *      ceiling triggers a clean abort with the same shape.
  *   3. maxErrors: N consecutive parse errors → abort with the same
  *      shape.
@@ -55,14 +55,14 @@ describe("Phase 5 — maxTimeoutMs", () => {
   });
 });
 
-describe("Phase 5 — maxTokens", () => {
+describe("Phase 5 — maxChars", () => {
   it("aborts when cumulative input+output chars cross the cap", async () => {
     // Each parent prompt is several KB. Cap at 500 chars total
     // means we abort after the first turn's prompt is sent.
     let calls = 0;
     const llm = async (p: string): Promise<string> => {
       calls++;
-      // Return a long string so output tokens count too.
+      // Return a long string so output chars count too.
       return "x".repeat(200) + ` (grep "X")`;
     };
     const result = (await runRLMFromContent("find X", "X\nY", {
@@ -70,15 +70,32 @@ describe("Phase 5 — maxTokens", () => {
       adapter: createNucleusAdapter(),
       maxTurns: 10,
       ragEnabled: false,
-      maxTokens: 500,
+      maxChars: 500,
     })) as string;
 
     expect(typeof result).toBe("string");
-    expect(result).toMatch(/aborted.*tokens|token.*limit/i);
+    expect(result).toMatch(/aborted.*chars|char.*limit/i);
     // We don't assert call count exactly — could be 1 or 2 depending
     // on when the check fires — but the cap MUST stop the loop
     // before maxTurns (10) iterations.
     expect(calls).toBeLessThan(10);
+  });
+
+  it("accepts the deprecated `maxTokens` alias", async () => {
+    // Back-compat: the field was renamed maxTokens → maxChars in
+    // 0.2.40; existing callers passing maxTokens must still see the
+    // cap fire instead of silently running unbounded.
+    const llm = async (_p: string): Promise<string> =>
+      "x".repeat(200) + ` (grep "X")`;
+    const result = (await runRLMFromContent("find X", "X\nY", {
+      llmClient: llm,
+      adapter: createNucleusAdapter(),
+      maxTurns: 10,
+      ragEnabled: false,
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      maxTokens: 500,
+    })) as string;
+    expect(result).toMatch(/aborted.*chars|char.*limit/i);
   });
 });
 

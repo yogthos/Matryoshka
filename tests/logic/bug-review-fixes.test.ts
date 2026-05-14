@@ -11,7 +11,7 @@ import { validateRegex, solve, type SolverTools } from "../../src/logic/lc-solve
 import { evaluate, type SandboxTools } from "../../src/logic/lc-interpreter.js";
 import { HandleRegistry } from "../../src/persistence/handle-registry.js";
 import { SessionDB } from "../../src/persistence/session-db.js";
-import { makePendingId } from "../../src/lattice-mcp-server.js";
+import { makePendingId, sweepStalePending } from "../../src/lattice-mcp-server.js";
 
 describe("Bug review fixes", () => {
   describe("Fix #1: lc-parser string tokenizer overflow", () => {
@@ -325,6 +325,30 @@ describe("Bug review fixes", () => {
       expect(validateRegex("foo").valid).toBe(true);
       expect(validateRegex("[A-Z]+").valid).toBe(true);
       expect(validateRegex("\\bword\\b").valid).toBe(true);
+    });
+  });
+
+  describe("Fix #8: sweepStalePending rejects abandoned LLM suspension queries", () => {
+    it("returns 0 when no stale entries exist (clean state)", () => {
+      // Fresh import — no pending queries should exist.
+      const cleaned = sweepStalePending(1); // 1ms threshold — even fresh entries are stale
+      expect(cleaned).toBe(0);
+    });
+
+    it("does not throw on edge-case inputs", () => {
+      // Negative age, zero, huge values — all should complete without error.
+      expect(sweepStalePending(-1)).toBe(0);
+      expect(sweepStalePending(0)).toBeGreaterThanOrEqual(0);
+      expect(sweepStalePending(Number.MAX_SAFE_INTEGER)).toBe(0);
+    });
+
+    it("makePendingId generates unique, collision-resistant IDs", () => {
+      const ids = new Set<string>();
+      for (let i = 0; i < 100; i++) {
+        ids.add(makePendingId("q"));
+        ids.add(makePendingId("b"));
+      }
+      expect(ids.size).toBe(200);
     });
   });
 });

@@ -113,10 +113,10 @@ export interface RLMContext {
   // Phase-5. When set and exceeded, handleCheckLimits sets `result`
   // to a partial-answer abort string starting with "[aborted: ...]".
   maxTimeoutMs?: number;
-  maxTokens?: number;
+  maxChars?: number;
   maxErrors?: number;
   startTime: number;
-  totalTokens: number;
+  totalChars: number;
   consecutiveErrors: number;
   /**
    * Counts consecutive LLM-client throws (auth failure, network error,
@@ -299,7 +299,7 @@ function verifyAndReturnResult(
  * work — the partial answer is always surfaced when present.
  */
 function formatAbort(
-  reason: "timeout" | "tokens" | "errors" | "llm",
+  reason: "timeout" | "chars" | "errors" | "llm",
   detail: string,
   ctx: RLMContext
 ): string {
@@ -372,8 +372,33 @@ async function compactHistory(ctx: RLMContext): Promise<void> {
     } chars`
   );
   let summary: string;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
-    summary = await ctx.llmClient(summarizePrompt);
+    if (ctx.maxTimeoutMs !== undefined) {
+      const remaining = ctx.maxTimeoutMs - (Date.now() - ctx.startTime);
+      if (remaining <= 0) {
+        ctx.log(`[Compaction] timeout budget exhausted before summarization`);
+        ctx.solverBindings.delete(stashName);
+        ctx.compactionFailures++;
+        return;
+      }
+      summary = await Promise.race([
+        ctx.llmClient(summarizePrompt),
+        new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `compaction summarization timed out after ${remaining}ms`
+                )
+              ),
+            remaining
+          );
+        }),
+      ]);
+    } else {
+      summary = await ctx.llmClient(summarizePrompt);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     ctx.log(`[Compaction] summarization failed: ${msg} — skipping compaction`);
@@ -382,6 +407,8 @@ async function compactHistory(ctx: RLMContext): Promise<void> {
     ctx.solverBindings.delete(stashName);
     ctx.compactionFailures++;
     return;
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
   }
 
   // Replace history[2..N] with the summary. Keep system + initial
@@ -428,13 +455,13 @@ async function handleQueryLLM(ctx: RLMContext): Promise<RLMContext> {
       return ctx;
     }
   }
-  if (ctx.maxTokens !== undefined && ctx.totalTokens > ctx.maxTokens) {
+  if (ctx.maxChars !== undefined && ctx.totalChars > ctx.maxChars) {
     ctx.result = formatAbort(
-      "tokens",
-      `${ctx.totalTokens} of ${ctx.maxTokens} chars`,
+      "chars",
+      `${ctx.totalChars} of ${ctx.maxChars} chars`,
       ctx
     );
-    ctx.log(`[Turn ${ctx.turn}] Aborting — token cap (${ctx.totalTokens})`);
+    ctx.log(`[Turn ${ctx.turn}] Aborting — char cap (${ctx.totalChars})`);
     return ctx;
   }
   if (
@@ -491,7 +518,7 @@ async function handleQueryLLM(ctx: RLMContext): Promise<RLMContext> {
   }
 
   const prompt = renderPrompt(ctx.history);
-  ctx.totalTokens += prompt.length;
+  ctx.totalChars += prompt.length;
   let response: string;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -554,7 +581,7 @@ async function handleQueryLLM(ctx: RLMContext): Promise<RLMContext> {
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
   }
   ctx.consecutiveLlmErrors = 0;
-  ctx.totalTokens += response.length;
+  ctx.totalChars += response.length;
 
   if (!response) {
     ctx.result = `Error: LLM returned empty response at turn ${ctx.turn}`;
@@ -1164,7 +1191,7 @@ export function createInitialContext(opts: {
   maxTurns: number;
   log: (msg: string) => void;
   maxTimeoutMs?: number;
-  maxTokens?: number;
+  maxChars?: number;
   maxErrors?: number;
   compactionThresholdChars?: number;
   onProgress?: (info: ProgressInfo) => void;
@@ -1209,10 +1236,10 @@ export function createInitialContext(opts: {
     previousResultCount: 0,
 
     maxTimeoutMs: opts.maxTimeoutMs,
-    maxTokens: opts.maxTokens,
+    maxChars: opts.maxChars,
     maxErrors: opts.maxErrors,
     startTime: Date.now(),
-    totalTokens: 0,
+    totalChars: 0,
     consecutiveErrors: 0,
     consecutiveLlmErrors: 0,
     lastLlmError: "",

@@ -126,7 +126,7 @@ export class ParserRegistry {
       } catch (err) {
         throw new Error(
           `Grammar package '${config.package}' not installed or WASM file missing. ` +
-            `Run: npm install ${config.package}`
+            `Run: pnpm add ${config.package}`
         );
       }
     }
@@ -139,7 +139,7 @@ export class ParserRegistry {
     } catch (err) {
       throw new Error(
         `Grammar package '${config.package}' not installed. ` +
-          `Run: npm install ${config.package}`
+          `Run: pnpm add ${config.package}`
       );
     }
 
@@ -203,7 +203,7 @@ export class ParserRegistry {
       const config = getLanguageConfig(language);
       throw new Error(
         `Grammar for '${language}' not available. ` +
-          `Run: npm install ${config?.package ?? `tree-sitter-${language}`}`
+          `Run: pnpm add ${config?.package ?? `tree-sitter-${language}`}`
       );
     }
 
