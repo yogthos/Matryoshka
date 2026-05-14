@@ -80,6 +80,23 @@ describe("Phase 5 — maxChars", () => {
     // before maxTurns (10) iterations.
     expect(calls).toBeLessThan(10);
   });
+
+  it("accepts the deprecated `maxTokens` alias", async () => {
+    // Back-compat: the field was renamed maxTokens → maxChars in
+    // 0.2.40; existing callers passing maxTokens must still see the
+    // cap fire instead of silently running unbounded.
+    const llm = async (_p: string): Promise<string> =>
+      "x".repeat(200) + ` (grep "X")`;
+    const result = (await runRLMFromContent("find X", "X\nY", {
+      llmClient: llm,
+      adapter: createNucleusAdapter(),
+      maxTurns: 10,
+      ragEnabled: false,
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      maxTokens: 500,
+    })) as string;
+    expect(result).toMatch(/aborted.*chars|char.*limit/i);
+  });
 });
 
 describe("Phase 5 — maxErrors", () => {

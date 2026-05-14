@@ -31,6 +31,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { HandleSession, type HandleResult } from "./engine/handle-session.js";
 import { runRLMFromContent } from "./rlm.js";
@@ -1523,7 +1524,18 @@ async function main() {
   console.error("[Lattice] Query results return handle stubs for 97%+ token savings");
 }
 
-main().catch((err) => {
-  console.error("[Lattice] Fatal error:", err);
-  process.exit(1);
-});
+// Only auto-start the MCP server when this file is invoked as the entry
+// point (i.e. via the `lattice-mcp` bin). Tests import named helpers
+// like `sweepStalePending` and `makePendingId` from this module — without
+// this guard, every test worker would silently spin up a stdio server
+// connected to its own stdin/stdout, which conflicts with vitest's I/O.
+const isEntryPoint =
+  typeof process.argv[1] === "string" &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isEntryPoint) {
+  main().catch((err) => {
+    console.error("[Lattice] Fatal error:", err);
+    process.exit(1);
+  });
+}

@@ -386,7 +386,12 @@ async function compactHistory(ctx: RLMContext): Promise<void> {
         ctx.llmClient(summarizePrompt),
         new Promise<never>((_, reject) => {
           timeoutHandle = setTimeout(
-            () => reject(new Error("__RLM_TIMEOUT__")),
+            () =>
+              reject(
+                new Error(
+                  `compaction summarization timed out after ${remaining}ms`
+                )
+              ),
             remaining
           );
         }),

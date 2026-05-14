@@ -328,7 +328,7 @@ describe("Bug review fixes", () => {
     });
   });
 
-  describe("Fix #4: sweepStalePending rejects abandoned LLM suspension queries", () => {
+  describe("Fix #8: sweepStalePending rejects abandoned LLM suspension queries", () => {
     it("returns 0 when no stale entries exist (clean state)", () => {
       // Fresh import — no pending queries should exist.
       const cleaned = sweepStalePending(1); // 1ms threshold — even fresh entries are stale

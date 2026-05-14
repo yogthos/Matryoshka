@@ -421,6 +421,13 @@ export interface RLMOptions {
    */
   maxChars?: number;
   /**
+   * @deprecated Renamed to `maxChars` — the metric was always
+   * characters, never tokens. Still accepted as an alias for one
+   * release cycle so existing callers don't break silently. Prefer
+   * `maxChars` in new code. If both are set, `maxChars` wins.
+   */
+  maxTokens?: number;
+  /**
    * Phase 5 — max consecutive code-execution / parse errors
    * before the loop gives up. Catches runaway "the LLM is stuck
    * emitting garbage" loops. Default unset = no cap (loop only
@@ -531,12 +538,18 @@ export async function runRLMFromContent(
     subRLMMaxDepth = 0,
     maxConcurrentSubcalls = 4,
     maxTimeoutMs,
-    maxChars,
+    maxChars: rawMaxChars,
     maxErrors,
     compactionThresholdChars: rawCompactionThresholdChars,
     onProgress,
     _subRLMDepth = 0,
   } = options;
+
+  // Back-compat: `maxTokens` is the old name for `maxChars` (the
+  // metric was always chars). Accept either; new field wins. The
+  // deprecated lint is the entire point of this read.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  const maxChars = rawMaxChars ?? options.maxTokens;
 
   // Paper-conformance fix (T1.4): the reference impl enables compaction
   // by default at ~75% of model context. We default-on at 20_000 chars

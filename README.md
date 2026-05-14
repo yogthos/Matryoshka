@@ -68,7 +68,7 @@ Matryoshka has two execution paths and not every primitive works in both:
 | `(grep "X" haystack)` | ✅ | ✅ |
 | `(show_vars)` | ✅ | ✅ (internal `_<name>` bindings filtered out) |
 | `FINAL_VAR(name)` resolution | ✅ | N/A — MCP returns query results directly |
-| `maxTimeoutMs` / `maxTokens` / `maxErrors` | ✅ | ❌ — MCP has its own session timeout |
+| `maxTimeoutMs` / `maxChars` / `maxErrors` | ✅ | ❌ — MCP has its own session timeout |
 | `compactionThresholdChars` | ✅ | ❌ — MCP doesn't have a multi-turn FSM history |
 
 The resource-limit features remain `runRLM`-only. The recursive primitives (`rlm_query`/`rlm_batch`) work in both paths — the MCP path spawns a child `runRLMFromContent` whose `llmClient` is the same sampling bridge as the parent, so each child turn flows through the existing MCP suspension/sampling protocol.
@@ -135,7 +135,7 @@ All optional. With none set, behavior is unchanged:
 ```typescript
 runRLM(query, file, {
   maxTimeoutMs: 30_000,    // wall-clock cap, propagates to children
-  maxTokens: 100_000,      // cumulative chars sent + received
+  maxChars: 100_000,       // cumulative chars sent + received
   maxErrors: 5,            // consecutive parse/execution errors
   compactionThresholdChars: 50_000,  // summarize history when prompt grows past this
 })
@@ -572,6 +572,10 @@ pnpm add tree-sitter-java
 
 # Enable Ruby support
 pnpm add tree-sitter-ruby
+
+# pnpm 10+ blocks install scripts by default — the grammar packages
+# need their native bindings built, so approve them after install:
+pnpm approve-builds
 ```
 
 **Languages with built-in mappings:**
