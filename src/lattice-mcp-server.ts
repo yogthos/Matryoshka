@@ -30,8 +30,9 @@ import {
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { stat } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { HandleSession, type HandleResult } from "./engine/handle-session.js";
 import { runRLMFromContent } from "./rlm.js";
@@ -1280,16 +1281,29 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
   }
 }
 
-// Cleanup on exit
-process.on("SIGINT", () => {
-  closeSession("process interrupted");
-  process.exit(0);
-});
+// Cleanup on exit. SIGINT / SIGTERM are the canonical termination paths.
+// SIGHUP fires when the controlling terminal goes away (e.g. iTerm session
+// closed without proper hangup propagation). Without it, the server would
+// keep running after its launching terminal died — the original zombie
+// process bug.
+let shuttingDown = false;
+function shutdown(reason: string, exitCode = 0): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    closeSession(reason);
+  } catch (err) {
+    console.error(
+      "[Lattice] Error during shutdown:",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+  process.exit(exitCode);
+}
 
-process.on("SIGTERM", () => {
-  closeSession("process terminated");
-  process.exit(0);
-});
+process.on("SIGINT", () => shutdown("process interrupted"));
+process.on("SIGTERM", () => shutdown("process terminated"));
+process.on("SIGHUP", () => shutdown("SIGHUP (terminal closed)"));
 
 // CLI flags
 const skipCwdChecking = process.argv.includes("--dangerously-skip-cwd-checking");
@@ -1298,6 +1312,31 @@ async function main() {
   // Handle version flag
   if (process.argv.includes("-v") || process.argv.includes("--version")) {
     console.log(`lattice-mcp v${getVersion()}`);
+    process.exit(0);
+  }
+
+  // Handle help flag. Without this, `lattice-mcp --help` falls through to
+  // the stdio MCP transport and blocks waiting for client messages,
+  // appearing to hang.
+  if (process.argv.includes("-h") || process.argv.includes("--help")) {
+    console.log(
+      `lattice-mcp v${getVersion()} — handle-based document analysis MCP server\n` +
+        `\n` +
+        `Usage: lattice-mcp [options]\n` +
+        `\n` +
+        `Options:\n` +
+        `  -v, --version                       Print version and exit\n` +
+        `  -h, --help                          Show this help and exit\n` +
+        `      --dangerously-skip-cwd-checking Disable CWD path safety check\n` +
+        `\n` +
+        `The server speaks the Model Context Protocol over stdio. It is meant\n` +
+        `to be launched by an MCP client (Claude Code, Claude Desktop, etc.)\n` +
+        `rather than invoked directly. The server exits automatically when\n` +
+        `the client closes stdin (EOF) or sends SIGINT/SIGTERM/SIGHUP.\n` +
+        `\n` +
+        `Environment:\n` +
+        `  LATTICE_TIMEOUT_MS   Session inactivity timeout in ms (default: 600000)`
+    );
     process.exit(0);
   }
 
@@ -1323,6 +1362,25 @@ async function main() {
   });
 
   const transport = new StdioServerTransport();
+
+  // Detect parent disconnect. The MCP SDK's StdioServerTransport only
+  // listens for `data` / `error` on stdin, never `end` / `close`, so when
+  // the client closes its end of the pipe (or the host process dies
+  // without delivering SIGTERM/SIGHUP) nothing tells us to exit and the
+  // process lingers forever. Attach our own EOF listeners and a transport
+  // onclose so any of those paths shuts us down.
+  //
+  // Order matters: set `transport.onclose` BEFORE `server.connect(transport)`
+  // because the SDK's Protocol.connect() WRAPS the existing onclose:
+  //   const _onclose = this.transport?.onclose;
+  //   this._transport.onclose = () => { _onclose?.(); this._onclose(); };
+  // Setting it after connect() would overwrite the wrapper and skip the
+  // protocol's own cleanup (clearing response handlers, aborting in-flight
+  // requests, etc.). Setting it before lets our handler compose cleanly.
+  transport.onclose = () => shutdown("transport closed");
+  process.stdin.on("end", () => shutdown("stdin EOF (client disconnected)"));
+  process.stdin.on("close", () => shutdown("stdin closed (client disconnected)"));
+
   // Install the sampling bridge BEFORE awaiting `server.connect()`.
   //
   // Subtle race: `server.connect(transport)` returns after the transport
@@ -1529,9 +1587,25 @@ async function main() {
 // like `sweepStalePending` and `makePendingId` from this module — without
 // this guard, every test worker would silently spin up a stdio server
 // connected to its own stdin/stdout, which conflicts with vitest's I/O.
-const isEntryPoint =
-  typeof process.argv[1] === "string" &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
+//
+// Compare realpaths on both sides. A naive `import.meta.url === pathToFileURL(argv[1])`
+// check breaks when the bin is reached through an `npm link` symlink:
+// `argv[1]` keeps the symlinked path (e.g. /opt/homebrew/lib/.../dist/lattice-mcp-server.js)
+// while `import.meta.url` resolves through it to the real source path.
+// The mismatch made `main()` never run — so `--version` printed nothing
+// and the server silently failed to start under symlinked installs.
+function detectEntryPoint(): boolean {
+  const argv1 = process.argv[1];
+  if (typeof argv1 !== "string") return false;
+  try {
+    const argv1Real = realpathSync(argv1);
+    const moduleReal = realpathSync(fileURLToPath(import.meta.url));
+    return argv1Real === moduleReal;
+  } catch {
+    return false;
+  }
+}
+const isEntryPoint = detectEntryPoint();
 
 if (isEntryPoint) {
   main().catch((err) => {
